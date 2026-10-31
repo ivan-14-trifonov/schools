@@ -19,6 +19,31 @@ $db->exec('CREATE TABLE IF NOT EXISTS lessons (id INTEGER PRIMARY KEY AUTOINCREM
 $db->exec('CREATE TABLE IF NOT EXISTS stages (id INTEGER PRIMARY KEY AUTOINCREMENT, school_id INTEGER NOT NULL REFERENCES schools(id) ON DELETE CASCADE, name TEXT NOT NULL, position INTEGER NOT NULL DEFAULT 0)');
 $mdCols=$db->query('PRAGMA table_info(lessons)')->fetchAll(PDO::FETCH_ASSOC);
 if(!in_array('content_md',array_column($mdCols,'name'),true))$db->exec("ALTER TABLE lessons ADD COLUMN content_md TEXT NOT NULL DEFAULT ''");
+$blockCols=$db->query('PRAGMA table_info(lessons)')->fetchAll(PDO::FETCH_ASSOC);
+if(!in_array('content_json',array_column($blockCols,'name'),true))$db->exec("ALTER TABLE lessons ADD COLUMN content_json TEXT");
+function legacyBlocks(string $source): array {
+ $parts=preg_split('~(?m)^[ \\t]*\\[audio\\]\\(([^\\r\\n)]+)\\)[ \\t]*(?:\\r?\\n|$)~u',$source,-1,PREG_SPLIT_DELIM_CAPTURE);
+ if($parts===false)return [['type'=>'markdown','text'=>$source]];
+ $blocks=[];foreach($parts as $index=>$part) {
+  if($index%2===0){if($part!=='')$blocks[]=['type'=>'markdown','text'=>$part];}
+  else $blocks[]=['type'=>'audio','src'=>$part];
+ }
+ return $blocks;
+}
+function validatedLessonBlocks(mixed $raw): string {
+ if(!is_array($raw)||!array_is_list($raw)||count($raw)>500)respond(422,['error'=>'Некорректный список блоков']);
+ $out=[];foreach($raw as $b){
+  if(!is_array($b)||!isset($b['type'])||!is_string($b['type']))respond(422,['error'=>'Неизвестный блок']);
+  if($b['type']==='markdown'){$value=$b['text']??null;if(!is_string($value))respond(422,['error'=>'Некорректный Markdown']);if($value==='')continue;if($out&&$out[count($out)-1]['type']==='markdown')$out[count($out)-1]['text'].=$value;else $out[]=['type'=>'markdown','text'=>$value];}
+  elseif($b['type']==='audio'){$src=$b['src']??null;if(!is_string($src)||strlen($src)>2048||!preg_match('~^(?:/media/[a-zA-Z0-9_./-]+|https://[^\\s]+)$~',$src))respond(422,['error'=>'Некорректная ссылка на аудио']);$out[]=['type'=>'audio','src'=>$src];}
+  else respond(422,['error'=>'Неподдерживаемый тип блока']);
+ }
+ $json=json_encode($out,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR);
+ if(strlen($json)>500000)respond(422,['error'=>'Содержимое урока слишком длинное']);
+ return $json;
+}
+$legacyRows=$db->query('SELECT id,content_md FROM lessons WHERE content_json IS NULL')->fetchAll(PDO::FETCH_ASSOC);
+if($legacyRows){$db->beginTransaction();try{$update=$db->prepare('UPDATE lessons SET content_json=? WHERE id=? AND content_json IS NULL');foreach($legacyRows as $r)$update->execute([json_encode(legacyBlocks($r['content_md']),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR),$r['id']]);$db->commit();}catch(Throwable $e){$db->rollBack();throw $e;}}
 $db->exec('CREATE TABLE IF NOT EXISTS lesson_stages (lesson_id INTEGER NOT NULL REFERENCES lessons(id) ON DELETE CASCADE, stage_id INTEGER NOT NULL REFERENCES stages(id) ON DELETE CASCADE, PRIMARY KEY(lesson_id,stage_id))');
 $stageCols=$db->query('PRAGMA table_info(stages)')->fetchAll(PDO::FETCH_ASSOC);
 if(!in_array('invite_code',array_column($stageCols,'name'),true))$db->exec('ALTER TABLE stages ADD COLUMN invite_code TEXT');
@@ -191,7 +216,7 @@ if(!$isAdmin && $method==='GET' && in_array($action,['schools','subjects','lesso
  $allowed=[];if($membership['stage_access_override']==='all')$allowed=array_map(static fn($st)=>(int)$st['id'],$allStages);else if($current!==null)foreach($allStages as $st)if($membership['stage_access_mode']==='all'||($membership['stage_access_mode']==='previous'&&(int)$st['position']<=$current)||($membership['stage_access_mode']==='current'&&(int)$st['id']===(int)$membership['current_stage_id']))$allowed[]=(int)$st['id'];
  if($action==='stages'){respond(200,['stages'=>array_values(array_filter($allStages,fn($st)=>in_array((int)$st['id'],$allowed,true)))]);}
  if(!$allowed)respond(200,[$action=>[]]);$slots=implode(',',array_fill(0,count($allowed),'?'));
- if($action==='lessons'){$q=$db->prepare("SELECT DISTINCT l.id,l.subject_id,l.name,l.content_md FROM lessons l JOIN lesson_stages ls ON ls.lesson_id=l.id WHERE l.subject_id=? AND ls.stage_id IN ($slots) ORDER BY l.id");$q->execute(array_merge([$subject],$allowed));$rows=$q->fetchAll(PDO::FETCH_ASSOC);foreach($rows as &$row){$get=$db->prepare('SELECT stage_id FROM lesson_stages WHERE lesson_id=?');$get->execute([$row['id']]);$row['stage_ids']=array_values(array_intersect(array_map('intval',$get->fetchAll(PDO::FETCH_COLUMN)),$allowed));}respond(200,['lessons'=>$rows]);}
+ if($action==='lessons'){$q=$db->prepare("SELECT DISTINCT l.id,l.subject_id,l.name,l.content_json FROM lessons l JOIN lesson_stages ls ON ls.lesson_id=l.id WHERE l.subject_id=? AND ls.stage_id IN ($slots) ORDER BY l.id");$q->execute(array_merge([$subject],$allowed));$rows=$q->fetchAll(PDO::FETCH_ASSOC);foreach($rows as &$row){$get=$db->prepare('SELECT stage_id FROM lesson_stages WHERE lesson_id=?');$get->execute([$row['id']]);$row['stage_ids']=array_values(array_intersect(array_map('intval',$get->fetchAll(PDO::FETCH_COLUMN)),$allowed));$row['content_blocks']=json_decode($row['content_json']??'[]',true);unset($row['content_json']);}respond(200,['lessons'=>$rows]);}
  if($action==='subjects'){$q=$db->prepare("SELECT DISTINCT s.id,s.school_id,s.name FROM subjects s JOIN lessons l ON l.subject_id=s.id JOIN lesson_stages ls ON ls.lesson_id=l.id WHERE s.school_id=? AND ls.stage_id IN ($slots) ORDER BY s.id");$q->execute(array_merge([$sid],$allowed));respond(200,['subjects'=>$q->fetchAll(PDO::FETCH_ASSOC)]);}
 }
 if(!$isAdmin)respond(403,['error'=>'Недостаточно прав']);
@@ -256,7 +281,7 @@ if($method==='GET'){
 if($action==='schools')respond(200,['schools'=>$db->query("SELECT s.id,s.name,s.description,CASE m.stage_access_override WHEN 'all' THEN 'Все этапы' WHEN 'none' THEN 'Нет этапа' ELSE st.name END AS current_stage_name FROM schools s LEFT JOIN school_memberships m ON m.school_id=s.id AND m.user_id=" . (int)$adminId . " LEFT JOIN stages st ON st.id=m.current_stage_id AND st.school_id=s.id ORDER BY s.name COLLATE NOCASE")->fetchAll(PDO::FETCH_ASSOC)]);
 if($action==='stages'){$school=numericId($_GET['school_id']??'');exists($db,'schools',$school);$q=$db->prepare('SELECT id,school_id,name,position,invite_code FROM stages WHERE school_id=? ORDER BY position,id');$q->execute([$school]);respond(200,['stages'=>$q->fetchAll(PDO::FETCH_ASSOC)]);}
 if($action==='subjects'){$school=numericId($_GET['school_id']??'');exists($db,'schools',$school);$s=$db->prepare('SELECT id,school_id,name FROM subjects WHERE school_id=? ORDER BY id');$s->execute([$school]);respond(200,['subjects'=>$s->fetchAll(PDO::FETCH_ASSOC)]);}
-if($action==='lessons'){$subject=numericId($_GET['subject_id']??'');exists($db,'subjects',$subject);$s=$db->prepare('SELECT l.id,l.subject_id,l.name,l.content_md,(SELECT json_group_array(stage_id) FROM lesson_stages WHERE lesson_id=l.id) AS stage_ids FROM lessons l WHERE l.subject_id=? ORDER BY l.id');$s->execute([$subject]);$rows=$s->fetchAll(PDO::FETCH_ASSOC);foreach($rows as &$row){$row['stage_ids']=json_decode($row['stage_ids'],true);}respond(200,['lessons'=>$rows]);}
+if($action==='lessons'){$subject=numericId($_GET['subject_id']??'');exists($db,'subjects',$subject);$s=$db->prepare('SELECT l.id,l.subject_id,l.name,l.content_json,(SELECT json_group_array(stage_id) FROM lesson_stages WHERE lesson_id=l.id) AS stage_ids FROM lessons l WHERE l.subject_id=? ORDER BY l.id');$s->execute([$subject]);$rows=$s->fetchAll(PDO::FETCH_ASSOC);foreach($rows as &$row){$row['stage_ids']=json_decode($row['stage_ids'],true);$row['content_blocks']=json_decode($row['content_json']??'[]',true);unset($row['content_json']);}respond(200,['lessons'=>$rows]);}
 }
 if(!in_array($method,['POST','PUT','DELETE'],true))respond(405,['error'=>'Метод не поддерживается']);
 $body=json_decode(file_get_contents('php://input'),true);if(!is_array($body))respond(400,['error'=>'Некорректный JSON']);
@@ -279,13 +304,13 @@ function updateLessonStages(PDO $db,int $lessonId,array $body): void {
 }
 if(in_array($action,['subjects','lessons'],true)){
  $table=$action;$parent=$action==='subjects'?'school_id':'subject_id';$parentTable=$action==='subjects'?'schools':'subjects';
- if($method==='POST'){$pid=numericId($body[$parent]??'');exists($db,$parentTable,$pid);$md=(string)($body['content_md']??'');if($action==='lessons'&&strlen($md)>400000)respond(422,['error'=>'Текст урока слишком длинный']);
- $sql=$action==='lessons'?"INSERT INTO lessons ($parent,name,content_md) VALUES(?,?,?)":"INSERT INTO subjects ($parent,name) VALUES(?,?)";
- $s=$db->prepare($sql);$values=[$pid,nameOf($body)];if($action==='lessons')$values[]=$md;$s->execute($values);$newId=(int)$db->lastInsertId();if($action==='lessons'){ $db->beginTransaction();updateLessonStages($db,$newId,$body);$db->commit();}respond(201,['id'=>$newId]);}
+ if($method==='POST'){$pid=numericId($body[$parent]??'');exists($db,$parentTable,$pid);$blocks=$action==='lessons'?validatedLessonBlocks($body['content_blocks']??[]):'[]';
+ $sql=$action==='lessons'?"INSERT INTO lessons ($parent,name,content_json) VALUES(?,?,?)":"INSERT INTO subjects ($parent,name) VALUES(?,?)";
+ $s=$db->prepare($sql);$values=[$pid,nameOf($body)];if($action==='lessons')$values[]=$blocks;$s->execute($values);$newId=(int)$db->lastInsertId();if($action==='lessons'){ $db->beginTransaction();updateLessonStages($db,$newId,$body);$db->commit();}respond(201,['id'=>$newId]);}
  $id=numericId($body['id']??'');exists($db,$table,$id);
- if($method==='PUT'){$db->beginTransaction();$md=(string)($body['content_md']??'');if($action==='lessons'&&strlen($md)>400000)respond(422,['error'=>'Текст урока слишком длинный']);
- $sql=$action==='lessons'?"UPDATE lessons SET name=?,content_md=? WHERE id=?":"UPDATE subjects SET name=? WHERE id=?";
- $s=$db->prepare($sql);$values=[nameOf($body)];if($action==='lessons')$values[]=$md;$values[]=$id;$s->execute($values);if($action==='lessons')updateLessonStages($db,$id,$body);$db->commit();respond(200,['ok'=>true]);}
+ if($method==='PUT'){$db->beginTransaction();$blocks=$action==='lessons'?validatedLessonBlocks($body['content_blocks']??[]):'[]';
+ $sql=$action==='lessons'?"UPDATE lessons SET name=?,content_json=? WHERE id=?":"UPDATE subjects SET name=? WHERE id=?";
+ $s=$db->prepare($sql);$values=[nameOf($body)];if($action==='lessons')$values[]=$blocks;$values[]=$id;$s->execute($values);if($action==='lessons')updateLessonStages($db,$id,$body);$db->commit();respond(200,['ok'=>true]);}
  if($method==='DELETE'){$s=$db->prepare("DELETE FROM $table WHERE id=?");$s->execute([$id]);respond(200,['ok'=>true]);}
 }
 respond(405,['error'=>'Действие не поддерживается']);

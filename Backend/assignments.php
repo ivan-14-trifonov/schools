@@ -35,7 +35,7 @@ if($action==='assignment_create'){
  $db->beginTransaction();
  try{
   $q=$db->prepare('INSERT INTO assignments(lesson_id,type,title,question) VALUES(?,?,?,?)');$q->execute([$lid,$type,$title,$question]);$id=(int)$db->lastInsertId();
-  $q=$db->prepare('UPDATE lessons SET content_md=content_md||? WHERE id=?');$q->execute(["\n\n[assignment](/assignments/$id)\n",$lid]);
+  $q=$db->prepare('SELECT content_json FROM lessons WHERE id=?');$q->execute([$lid]);$blocks=json_decode((string)$q->fetchColumn(),true)?:[];$blocks[]=['type'=>'markdown','text'=>"\n\n[assignment](/assignments/$id)\n"];$q=$db->prepare('UPDATE lessons SET content_json=? WHERE id=?');$q->execute([validatedLessonBlocks($blocks),$lid]);
   $db->commit();
  }catch(Throwable $e){$db->rollBack();throw $e;}
  respond(201,['id'=>$id,'ok'=>true]);
