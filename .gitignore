@@ -1,0 +1,12 @@
+# Production database, WAL files, and live user sessions
+/data/*.sqlite
+/data/*.sqlite-*
+/data/sessions/
+# Local operational memory and secrets
+/MEMORY.md
+.env
+.env.*
+!.env.example
+*.log
+*.key
+*.pem
