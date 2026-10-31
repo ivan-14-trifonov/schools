@@ -29,3 +29,5 @@ textarea{width:100%;padding:13px 14px;font:inherit;border:1px solid #cbd5e1;bord
 .lesson-stage-group{margin-top:20px}.lesson-stage-heading{font-size:16px;color:#50627d;margin:0 0 8px;font-weight:700}.lesson-stage-group .lesson-list{margin:0 0 12px}
 
 .learning-lessons{display:flex;flex-direction:column;gap:10px;margin-top:24px}.learning-lessons .lesson-link{text-align:left;width:100%}
+
+.lesson-composer{border:1px solid #d5dfea;border-radius:12px;padding:12px;background:#fff}.lesson-inline-text{width:100%;resize:vertical;border:0!important;box-shadow:none!important;background:transparent!important;min-height:88px;padding:12px!important;line-height:1.65}.lesson-inline-text:focus{outline:2px solid #acc8f4;outline-offset:-2px;border-radius:6px}.lesson-inline-media{margin:8px 0;padding:12px;border:1px solid #c9d9ed;border-radius:10px;background:#f5f8fc}.lesson-inline-media audio{width:100%;max-width:600px;display:block;margin-top:8px}.lesson-media-heading{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}.lesson-media-heading .actions{margin:0;gap:5px}.lesson-media-heading button{padding:5px 9px;font-size:13px}
