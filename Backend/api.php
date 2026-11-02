@@ -56,6 +56,7 @@ $db->exec('CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMEN
 $db->exec("CREATE TABLE IF NOT EXISTS assignments (id INTEGER PRIMARY KEY AUTOINCREMENT, lesson_id INTEGER NOT NULL REFERENCES lessons(id) ON DELETE CASCADE, type TEXT NOT NULL CHECK(type='simple_question'), title TEXT NOT NULL, question TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)");
 $db->exec("CREATE TABLE IF NOT EXISTS assignment_answers (id INTEGER PRIMARY KEY AUTOINCREMENT, assignment_id INTEGER NOT NULL REFERENCES assignments(id) ON DELETE CASCADE, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, answer_text TEXT NOT NULL, submitted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)");
 $db->exec('CREATE INDEX IF NOT EXISTS idx_assignment_answers_user ON assignment_answers(user_id,submitted_at)');
+$db->exec('CREATE TABLE IF NOT EXISTS composite_questions (assignment_id INTEGER PRIMARY KEY REFERENCES assignments(id) ON DELETE CASCADE, schema_json TEXT NOT NULL)');
 // Permissions are defined in code; roles and their grants are managed by platform admins.
 define('SCHOOL_PERMISSIONS', [
  'lessons.read'=>'Чтение уроков',
