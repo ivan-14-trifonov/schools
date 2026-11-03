@@ -57,6 +57,14 @@ $db->exec("CREATE TABLE IF NOT EXISTS assignments (id INTEGER PRIMARY KEY AUTOIN
 $db->exec("CREATE TABLE IF NOT EXISTS assignment_answers (id INTEGER PRIMARY KEY AUTOINCREMENT, assignment_id INTEGER NOT NULL REFERENCES assignments(id) ON DELETE CASCADE, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, answer_text TEXT NOT NULL, submitted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)");
 $db->exec('CREATE INDEX IF NOT EXISTS idx_assignment_answers_user ON assignment_answers(user_id,submitted_at)');
 $db->exec('CREATE TABLE IF NOT EXISTS composite_questions (assignment_id INTEGER PRIMARY KEY REFERENCES assignments(id) ON DELETE CASCADE, schema_json TEXT NOT NULL)');
+$db->exec("CREATE TABLE IF NOT EXISTS assignment_versions (id INTEGER PRIMARY KEY AUTOINCREMENT, assignment_id INTEGER NOT NULL REFERENCES assignments(id) ON DELETE CASCADE, version INTEGER NOT NULL, title TEXT NOT NULL, question TEXT NOT NULL, type TEXT NOT NULL CHECK(type IN ('simple_question','composite_question')), schema_json TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(assignment_id,version))");
+$answerCols=$db->query('PRAGMA table_info(assignment_answers)')->fetchAll(PDO::FETCH_ASSOC);
+if(!in_array('version_id',array_column($answerCols,'name'),true))$db->exec('ALTER TABLE assignment_answers ADD COLUMN version_id INTEGER REFERENCES assignment_versions(id)');
+$db->exec('CREATE INDEX IF NOT EXISTS idx_answers_version ON assignment_answers(version_id)');
+$unversioned=$db->query('SELECT a.id,a.title,a.question,c.schema_json FROM assignments a LEFT JOIN composite_questions c ON c.assignment_id=a.id WHERE NOT EXISTS(SELECT 1 FROM assignment_versions v WHERE v.assignment_id=a.id)')->fetchAll(PDO::FETCH_ASSOC);
+if($unversioned){$insertV=$db->prepare('INSERT INTO assignment_versions(assignment_id,version,title,question,type,schema_json) VALUES(?,1,?,?,?,?)');foreach($unversioned as $a)$insertV->execute([$a['id'],$a['title'],$a['question'],$a['schema_json']===null?'simple_question':'composite_question',$a['schema_json']]);}
+$db->exec('UPDATE assignment_answers SET version_id=(SELECT id FROM assignment_versions WHERE assignment_id=assignment_answers.assignment_id ORDER BY version LIMIT 1) WHERE version_id IS NULL');
+
 // Permissions are defined in code; roles and their grants are managed by platform admins.
 define('SCHOOL_PERMISSIONS', [
  'lessons.read'=>'Чтение уроков',

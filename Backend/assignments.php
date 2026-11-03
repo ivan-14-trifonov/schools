@@ -47,7 +47,8 @@ if($action==='assignment'){
  $id=numericId($_GET['id']??'');$a=assignmentDetails($db,$id);
  if(!assignmentReadable($db,$a,$adminId,$isAdmin))respond(403,['error'=>'Задание недоступно']);
  if($method!=='GET')respond(405,['error'=>'Метод не поддерживается']);
- $schema=compositeSchema($db,$id);respond(200,['assignment'=>['id'=>(int)$a['id'],'lesson_id'=>(int)$a['lesson_id'],'type'=>$schema===null?'simple_question':'composite_question','title'=>$a['title'],'question'=>$a['question'],'fields'=>$schema]]);
+ $q=$db->prepare('SELECT id,version FROM assignment_versions WHERE assignment_id=? ORDER BY version DESC LIMIT 1');$q->execute([$id]);$v=$q->fetch(PDO::FETCH_ASSOC);
+ $schema=compositeSchema($db,$id);respond(200,['assignment'=>['id'=>(int)$a['id'],'lesson_id'=>(int)$a['lesson_id'],'type'=>$schema===null?'simple_question':'composite_question','title'=>$a['title'],'question'=>$a['question'],'fields'=>$schema,'version_id'=>(int)($v['id']??0),'version'=>(int)($v['version']??1)]]);
 }
 if($action==='assignment_create'){
  if($method!=='POST')respond(405,['error'=>'Метод не поддерживается']);
@@ -60,18 +61,44 @@ if($action==='assignment_create'){
  $db->beginTransaction();
  try{
   $q=$db->prepare('INSERT INTO assignments(lesson_id,type,title,question) VALUES(?,?,?,?)');$q->execute([$lid,'simple_question',$title,$question]);$id=(int)$db->lastInsertId();if($schema!==null){$q=$db->prepare('INSERT INTO composite_questions(assignment_id,schema_json) VALUES(?,?)');$q->execute([$id,$schema]);}
+  $q=$db->prepare('INSERT INTO assignment_versions(assignment_id,version,title,question,type,schema_json) VALUES(?,1,?,?,?,?)');$q->execute([$id,$title,$question,$type,$schema]);
   $q=$db->prepare('SELECT content_json FROM lessons WHERE id=?');$q->execute([$lid]);$blocks=json_decode((string)$q->fetchColumn(),true)?:[];$blocks[]=['type'=>'markdown','text'=>"\n\n[assignment](/assignments/$id)\n"];$q=$db->prepare('UPDATE lessons SET content_json=? WHERE id=?');$q->execute([validatedLessonBlocks($blocks),$lid]);
   $db->commit();
  }catch(Throwable $e){$db->rollBack();throw $e;}
  respond(201,['id'=>$id,'ok'=>true]);
+}
+if($action==='assignment_update'){
+ if($method!=='PUT')respond(405,['error'=>'Метод не поддерживается']);
+ if(!$isAdmin)respond(403,['error'=>'Недостаточно прав']);
+ $b=json_decode(file_get_contents('php://input'),true);if(!is_array($b))respond(400,['error'=>'Некорректные данные']);
+ $id=numericId($b['id']??'');$a=assignmentDetails($db,$id);
+ $type=(string)($b['type']??'');if(!in_array($type,['simple_question','composite_question'],true))respond(422,['error'=>'Неизвестный тип задания']);
+ $schema=$type==='composite_question'?validateCompositeSchema($b['fields']??null):null;
+ $title=trim((string)($b['title']??''));$question=trim((string)($b['question']??''));
+ if($title===''||mb_strlen($title)>120||$question===''||mb_strlen($question)>10000)respond(422,['error'=>'Укажите название и вопрос']);
+ $db->beginTransaction();
+ try {
+  $q=$db->prepare('SELECT id,version FROM assignment_versions WHERE assignment_id=? ORDER BY version DESC LIMIT 1');$q->execute([$id]);$latest=$q->fetch(PDO::FETCH_ASSOC);
+  if((int)($b['version_id']??0)!==(int)($latest['id']??0)){$db->rollBack();respond(409,['error'=>'Задание уже изменено в другой вкладке. Откройте редактор заново.']);}
+  $q=$db->prepare('UPDATE assignments SET title=?,question=? WHERE id=?');$q->execute([$title,$question,$id]);
+  if($schema===null){$q=$db->prepare('DELETE FROM composite_questions WHERE assignment_id=?');$q->execute([$id]);}
+  else {$q=$db->prepare('INSERT INTO composite_questions(assignment_id,schema_json) VALUES(?,?) ON CONFLICT(assignment_id) DO UPDATE SET schema_json=excluded.schema_json');$q->execute([$id,$schema]);}
+  $q=$db->prepare('INSERT INTO assignment_versions(assignment_id,version,title,question,type,schema_json) VALUES(?,?,?,?,?,?)');$q->execute([$id,(int)($latest['version']??0)+1,$title,$question,$type,$schema]);
+  $db->commit();
+ }catch(Throwable $e){if($db->inTransaction())$db->rollBack();throw $e;}
+ respond(200,['ok'=>true]);
 }
 if($action==='answer_submit'){
  if($method!=='POST')respond(405,['error'=>'Метод не поддерживается']);
  $b=json_decode(file_get_contents('php://input'),true);if(!is_array($b))respond(400,['error'=>'Некорректные данные']);
  $id=numericId($b['assignment_id']??'');$a=assignmentDetails($db,$id);
  if(!assignmentReadable($db,$a,$adminId,$isAdmin))respond(403,['error'=>'Нет доступа к заданию']);
- $schema=compositeSchema($db,$id);if($schema!==null){$answer=json_encode(validateCompositeAnswer($schema,$b['values']??null),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR);}else{$answer=trim((string)($b['answer_text']??''));if($answer===''||mb_strlen($answer)>20000)respond(422,['error'=>'Ответ должен содержать от 1 до 20000 символов']);}
- $q=$db->prepare('INSERT INTO assignment_answers(assignment_id,user_id,answer_text) VALUES(?,?,?)');$q->execute([$id,$adminId,$answer]);
+ $q=$db->prepare('SELECT id,type,schema_json FROM assignment_versions WHERE assignment_id=? ORDER BY version DESC LIMIT 1');$q->execute([$id]);$version=$q->fetch(PDO::FETCH_ASSOC);
+ if(!$version)respond(409,['error'=>'Версия задания не найдена']);
+ if((int)($b['version_id']??0)!==(int)$version['id'])respond(409,['error'=>'Задание изменилось. Обновите страницу и отправьте ответ заново.']);
+ $schema=$version['type']==='composite_question'?json_decode($version['schema_json'],true):null;
+ if($schema!==null){$answer=json_encode(validateCompositeAnswer($schema,$b['values']??null),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR);}else{$answer=trim((string)($b['answer_text']??''));if($answer===''||mb_strlen($answer)>20000)respond(422,['error'=>'Ответ должен содержать от 1 до 20000 символов']);}
+ $q=$db->prepare('INSERT INTO assignment_answers(assignment_id,user_id,answer_text,version_id) VALUES(?,?,?,?)');$q->execute([$id,$adminId,$answer,$version['id']]);
  respond(201,['ok'=>true,'id'=>(int)$db->lastInsertId()]);
 }
 if($action==='answers'){
@@ -82,7 +109,7 @@ if($action==='answers'){
  else{$authorized=$isAdmin||hasPermission($db,$adminId,$school,'answers.own.read')||hasPermission($db,$adminId,$school,'answers.all.read');}
  if(!$authorized)respond(403,['error'=>'Нет права на просмотр ответов']);
  $aid=isset($_GET['assignment_id'])?numericId($_GET['assignment_id']):0;
- $sql="SELECT aa.id,aa.answer_text,aa.submitted_at,a.id AS assignment_id,a.title,CASE WHEN cq.assignment_id IS NOT NULL THEN 'composite_question' ELSE a.type END AS type,cq.schema_json,l.name AS lesson_name,s.name AS subject_name,u.username,u.first_name,u.last_name FROM assignment_answers aa JOIN assignments a ON a.id=aa.assignment_id LEFT JOIN composite_questions cq ON cq.assignment_id=a.id JOIN lessons l ON l.id=a.lesson_id JOIN subjects s ON s.id=l.subject_id JOIN users u ON u.id=aa.user_id WHERE s.school_id=?";
+ $sql="SELECT aa.id,aa.answer_text,aa.submitted_at,a.id AS assignment_id,COALESCE(av.title,a.title) AS title,COALESCE(av.question,a.question) AS question,COALESCE(av.type,CASE WHEN cq.assignment_id IS NOT NULL THEN 'composite_question' ELSE a.type END) AS type,COALESCE(av.schema_json,cq.schema_json) AS schema_json,av.version,l.name AS lesson_name,s.name AS subject_name,u.username,u.first_name,u.last_name FROM assignment_answers aa JOIN assignments a ON a.id=aa.assignment_id LEFT JOIN composite_questions cq ON cq.assignment_id=a.id LEFT JOIN assignment_versions av ON av.id=aa.version_id JOIN lessons l ON l.id=a.lesson_id JOIN subjects s ON s.id=l.subject_id JOIN users u ON u.id=aa.user_id WHERE s.school_id=?";
  $args=[$school];
  if($scope==='own'){$sql.=' AND aa.user_id=?';$args[]=$adminId;}
  if($aid){$sql.=' AND a.id=?';$args[]=$aid;}
