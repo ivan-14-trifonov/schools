@@ -113,10 +113,12 @@ $('school-form').addEventListener('submit',e=>{e.preventDefault();run(async()=>{
 $('subject-form').addEventListener('submit',e=>{e.preventDefault();if(!active())return;run(async()=>{await request('subjects','POST',{school_id:Number(selected),name:$('subject-name').value.trim()});$('subject-name').value='';await loadSubjects();},'Предмет добавлен');});
 
 let answerRights={own:false,all:false},responseFilter=null;
-async function loadAnswerRights(){answerRights={own:isAdmin,all:isAdmin};if(!isAdmin&&active()){try{const data=await request('answer_rights','GET',null,{school_id:selected});answerRights=data.rights;}catch{}}$('responses-nav').hidden=!(answerRights.own||answerRights.all);}
+async function loadAnswerRights(strict=false){answerRights={own:isAdmin,all:isAdmin};if(!isAdmin&&active()){try{const data=await request('answer_rights','GET',null,{school_id:selected});answerRights=data.rights;}catch(err){if(strict)throw err;}}$('responses-nav').hidden=!(answerRights.own||answerRights.all);}
 async function renderResponses(){const list=$('responses-list'),tools=$('responses-tools');list.replaceChildren();tools.replaceChildren();if(!active())return;
+ try{await loadAnswerRights(true);}catch(err){list.append(element('p',err.message,'error'));return;}
+ if(isAdmin)answerRights={own:true,all:true};
  const scopes=answerRights.all?['own','all']:answerRights.own?['own']:[];if(!scopes.length){list.append(element('p','Нет прав для просмотра ответов','muted'));return;}
- let scope=renderResponses.scope||scopes[0];if(!scopes.includes(scope))scope=scopes[0];
+ let scope=renderResponses.scope||(isAdmin&&answerRights.all?'all':scopes[0]);if(!scopes.includes(scope))scope=isAdmin&&answerRights.all?'all':scopes[0];
  if(answerRights.own&&answerRights.all){tools.append(button('Мои ответы',()=>{renderResponses.scope='own';renderResponses();},scope==='own'?'primary':''),button('Все ответы',()=>{renderResponses.scope='all';renderResponses();},scope==='all'?'primary':''));}
  if(responseFilter){tools.append(button('Показать все задания',()=>{responseFilter=null;renderResponses();}));}
  try{const params={school_id:selected,scope};if(responseFilter)params.assignment_id=responseFilter;const data=await request('answers','GET',null,params);
