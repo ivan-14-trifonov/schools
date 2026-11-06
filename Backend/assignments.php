@@ -66,9 +66,10 @@ if($action==='assignment'){
 }
 if($action==='assignment_create'){
  if($method!=='POST')respond(405,['error'=>'Метод не поддерживается']);
- if(!$isAdmin)respond(403,['error'=>'Недостаточно прав']);
+
  $b=json_decode(file_get_contents('php://input'),true);if(!is_array($b))respond(400,['error'=>'Некорректные данные']);
  $lid=numericId($b['lesson_id']??'');$q=$db->prepare('SELECT id FROM lessons WHERE id=?');$q->execute([$lid]);if(!$q->fetchColumn())respond(404,['error'=>'Урок не найден']);
+ if(!canManageLesson($db,$adminId,$lid))respond(403,['error'=>'Нет прав редактирования этого урока']);
  $type=(string)($b['type']??'');if(!in_array($type,['simple_question','composite_question'],true))respond(422,['error'=>'Неизвестный тип задания']);$schema=$type==='composite_question'?validateCompositeSchema($b['fields']??null):null;
  $title=trim((string)($b['title']??''));$question=trim((string)($b['question']??''));
  if($title===''||mb_strlen($title)>120||$question===''||mb_strlen($question)>10000)respond(422,['error'=>'Укажите название и вопрос']);
@@ -83,9 +84,10 @@ if($action==='assignment_create'){
 }
 if($action==='assignment_update'){
  if($method!=='PUT')respond(405,['error'=>'Метод не поддерживается']);
- if(!$isAdmin)respond(403,['error'=>'Недостаточно прав']);
+
  $b=json_decode(file_get_contents('php://input'),true);if(!is_array($b))respond(400,['error'=>'Некорректные данные']);
  $id=numericId($b['id']??'');$a=assignmentDetails($db,$id);
+ if(!canManageLesson($db,$adminId,(int)$a['lesson_id']))respond(403,['error'=>'Нет прав редактирования этого задания']);
  $type=(string)($b['type']??'');if(!in_array($type,['simple_question','composite_question'],true))respond(422,['error'=>'Неизвестный тип задания']);
  $schema=$type==='composite_question'?validateCompositeSchema($b['fields']??null):null;
  $title=trim((string)($b['title']??''));$question=trim((string)($b['question']??''));
