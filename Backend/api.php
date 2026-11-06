@@ -119,7 +119,7 @@ function canSeeStage(PDO $db,int $userId,int $schoolId,int $stageId): bool {
  $q=$db->prepare('SELECT 1 FROM users WHERE id=? AND is_platform_admin=1');$q->execute([$userId]);if($q->fetchColumn())return true;
  if(!hasPermission($db,$userId,$schoolId,'lessons.read'))return false;
  $q=$db->prepare('SELECT m.current_stage_id,m.stage_access_override,s.stage_access_mode FROM school_memberships m JOIN schools s ON s.id=m.school_id WHERE m.user_id=? AND m.school_id=?');$q->execute([$userId,$schoolId]);$membership=$q->fetch(PDO::FETCH_ASSOC);if(!$membership||$membership['stage_access_override']==='none')return false;
- if($membership['stage_access_override']==='all'||hasPermission($db,$userId,$schoolId,'lessons.all.read'))return true;
+ if(hasPermission($db,$userId,$schoolId,'lessons.all.read'))return true;
  if(!$membership['current_stage_id'])return false;
  $q=$db->prepare('SELECT id,position FROM stages WHERE school_id=? AND id IN (?,?)');$q->execute([$schoolId,$stageId,$membership['current_stage_id']]);$positions=[];foreach($q->fetchAll(PDO::FETCH_ASSOC) as $row)$positions[(int)$row['id']]=(int)$row['position'];
  if(!isset($positions[$stageId],$positions[(int)$membership['current_stage_id']]))return false;
@@ -240,7 +240,7 @@ if(!$isAdmin && $method==='GET' && in_array($action,['schools','subjects','lesso
  if(!$sid||!hasPermission($db,$adminId,$sid,'lessons.read'))respond(403,['error'=>'Нет доступа к школе']);
  $q=$db->prepare('SELECT m.current_stage_id,m.stage_access_override,s.stage_access_mode FROM school_memberships m JOIN schools s ON s.id=m.school_id WHERE m.user_id=? AND m.school_id=?');$q->execute([$adminId,$sid]);$membership=$q->fetch(PDO::FETCH_ASSOC);if(!$membership||$membership['stage_access_override']==='none')respond(200,[$action=>[]]);
  $q=$db->prepare('SELECT id,name,position FROM stages WHERE school_id=? ORDER BY position,id');$q->execute([$sid]);$allStages=$q->fetchAll(PDO::FETCH_ASSOC);$current=null;foreach($allStages as $st)if((int)$st['id']===(int)$membership['current_stage_id'])$current=(int)$st['position'];
- $allowed=[];if($membership['stage_access_override']==='all'||hasPermission($db,$adminId,$sid,'lessons.all.read'))$allowed=array_map(static fn($st)=>(int)$st['id'],$allStages);else if($current!==null)foreach($allStages as $st)if($membership['stage_access_mode']==='all'||($membership['stage_access_mode']==='previous'&&(int)$st['position']<=$current)||($membership['stage_access_mode']==='current'&&(int)$st['id']===(int)$membership['current_stage_id']))$allowed[]=(int)$st['id'];
+ $allowed=[];if(hasPermission($db,$adminId,$sid,'lessons.all.read'))$allowed=array_map(static fn($st)=>(int)$st['id'],$allStages);else if($current!==null)foreach($allStages as $st)if($membership['stage_access_mode']==='all'||($membership['stage_access_mode']==='previous'&&(int)$st['position']<=$current)||($membership['stage_access_mode']==='current'&&(int)$st['id']===(int)$membership['current_stage_id']))$allowed[]=(int)$st['id'];
  if($action==='stages'){respond(200,['stages'=>array_values(array_filter($allStages,fn($st)=>in_array((int)$st['id'],$allowed,true)))]);}
  if(!$allowed)respond(200,[$action=>[]]);$slots=implode(',',array_fill(0,count($allowed),'?'));
  if($action==='lessons'){$q=$db->prepare("SELECT DISTINCT l.id,l.subject_id,l.name,l.content_json FROM lessons l JOIN lesson_stages ls ON ls.lesson_id=l.id WHERE l.subject_id=? AND ls.stage_id IN ($slots) ORDER BY l.id");$q->execute(array_merge([$subject],$allowed));$rows=$q->fetchAll(PDO::FETCH_ASSOC);foreach($rows as &$row){$get=$db->prepare('SELECT stage_id FROM lesson_stages WHERE lesson_id=?');$get->execute([$row['id']]);$row['stage_ids']=array_values(array_intersect(array_map('intval',$get->fetchAll(PDO::FETCH_COLUMN)),$allowed));$row['content_blocks']=json_decode($row['content_json']??'[]',true);unset($row['content_json']);}respond(200,['lessons'=>$rows]);}
@@ -256,7 +256,7 @@ if($action==='members'){
  }
  if($method==='PUT'){
   $body=json_decode(file_get_contents('php://input'),true);if(!is_array($body))respond(400,['error'=>'Некорректный JSON']);$id=numericId($body['id']??'');$q=$db->prepare('SELECT school_id FROM school_memberships WHERE id=?');$q->execute([$id]);$sid=(int)$q->fetchColumn();if(!$sid)respond(404,['error'=>'Участник не найден']);
-  $override=(string)($body['stage_access_override']??'default');if(!in_array($override,['default','none','all'],true))respond(422,['error'=>'Неизвестный режим этапа']);
+  $override=(string)($body['stage_access_override']??'default');if(!in_array($override,['default','none'],true))respond(422,['error'=>'Неизвестный режим этапа']);
   $rawStage=$body['current_stage_id']??null;$stage=($rawStage===null||$rawStage==='')?null:numericId($rawStage);
   if($stage!==null){$q=$db->prepare('SELECT 1 FROM stages WHERE id=? AND school_id=?');$q->execute([$stage,$sid]);if(!$q->fetchColumn())respond(422,['error'=>'Этап не принадлежит школе']);}
   if($override==='default'&&$stage===null)respond(422,['error'=>'Выберите текущий этап обучения']);
