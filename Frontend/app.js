@@ -154,17 +154,21 @@ function renderAssignmentLinks(target){target.querySelectorAll('a[href]').forEac
  const id=Number(match[1]);const wrapper=element('div','Загрузка задания…','panel');anchor.replaceWith(wrapper);
  request('assignment','GET',null,{id}).then(async ({assignment:a})=>{
   wrapper.replaceChildren();wrapper.append(element('h3',a.title),element('p',a.question));const body=element('div');wrapper.append(body);
-  const actions=element('div',undefined,'actions');if(answerRights.own||answerRights.all)actions.append(button('Просмотреть ответы',()=>navigateResponses(id)));if(isAdmin)actions.append(button('Редактировать',()=>assignmentEditor({id:a.lesson_id},a)));wrapper.append(actions);
+  const actions=element('div',undefined,'assignment-actions');let retryButton=null;
+  if(answerRights.own||answerRights.all){const view=button('Просмотреть ответы',()=>navigateResponses(id),'assignment-action assignment-action-secondary');actions.append(view);}
+  if(isAdmin){const edit=button('Редактировать',()=>assignmentEditor({id:a.lesson_id},a),'assignment-action assignment-action-secondary');actions.append(edit);}
+  wrapper.append(actions);
   const showReceipt=answer=>{
    body.replaceChildren();const receipt=element('div',undefined,'assignment-receipt');receipt.append(element('strong','Ответ отправлен'),element('p','Дата отправки: '+formatSubmissionTime(answer.submitted_at),'muted small'));
    let display=answer.answer_text;if(answer.type==='composite_question'){try{display=formatCompositeAnswer(answer.fields||[],JSON.parse(answer.answer_text));}catch{}}
    const value=element('p',display);value.style.whiteSpace='pre-wrap';receipt.append(element('h4','Ваш отправленный ответ'),value);body.append(receipt);
-   body.append(button('Отправить новый ответ',showForm));
+   retryButton=button('Отправить новый ответ',showForm,'assignment-action assignment-action-primary');actions.prepend(retryButton);
   };
   const showForm=()=>{
+   if(retryButton){retryButton.remove();retryButton=null;}
    body.replaceChildren();const form=element('form');let getValues,input;
    if(a.type==='composite_question')getValues=compositeAnswerFields(a.fields||[],form);else{const label=element('label','Ваш ответ');input=document.createElement('textarea');input.required=true;input.rows=4;label.append(input);form.append(label);}
-   const submit=element('button','Отправить ответ','primary');submit.type='submit';form.append(submit);body.append(form);
+   const submit=element('button','Отправить ответ','assignment-action assignment-action-primary');submit.type='submit';form.append(submit);body.append(form);
    const requestKey=newSubmissionKey();
    form.addEventListener('submit',async e=>{e.preventDefault();if(submit.disabled)return;submit.disabled=true;const payload=a.type==='composite_question'?{assignment_id:id,version_id:a.version_id,request_key:requestKey,values:getValues()}:{assignment_id:id,version_id:a.version_id,request_key:requestKey,answer_text:input.value};
     try{const data=await request('answer_submit','POST',payload);showReceipt(data.answer);notice('Ответ успешно отправлен');}

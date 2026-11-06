@@ -35,3 +35,14 @@ textarea{width:100%;padding:13px 14px;font:inherit;border:1px solid #cbd5e1;bord
 .composite-answer-field{margin:14px 0;padding:12px;border-left:3px solid #d6e2f4;background:#f9fbff;border-radius:6px}.composite-answer-field>label{display:block;font-weight:600;margin-bottom:6px}.composite-answer-field .panel{margin:10px 0;padding:12px}
 
 .assignment-receipt{border-left:3px solid #2f7355;background:#f2f8f4;padding:13px 16px;margin:12px 0;border-radius:5px}.assignment-receipt h4{margin:12px 0 6px}.assignment-receipt p{margin:6px 0}
+
+/* Assignment actions: clear priority, consistent geometry and mobile layout. */
+.assignment-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:18px;padding-top:16px;border-top:1px solid #e5eaf1}
+.assignment-action{display:inline-flex;align-items:center;justify-content:center;min-height:42px;padding:10px 16px;border-radius:10px;font:inherit;font-size:14px;font-weight:600;line-height:1.25;cursor:pointer;transition:background-color .15s,border-color .15s,box-shadow .15s;white-space:normal;text-align:center}
+.assignment-action-primary{background:#2563eb;color:#fff;border:1px solid #2563eb;box-shadow:0 2px 5px #2563eb1c}
+.assignment-action-primary:hover:not(:disabled){background:#1d4ed8;border-color:#1d4ed8}
+.assignment-action-secondary{background:#fff;color:#315078;border:1px solid #d5e0ed}
+.assignment-action-secondary:hover:not(:disabled){background:#f2f6fc;border-color:#aabed9}
+.assignment-action:focus-visible{outline:3px solid #93b4f7;outline-offset:2px}
+.assignment-action:disabled{opacity:.6;cursor:wait}
+@media(max-width:540px){.assignment-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.assignment-actions .assignment-action-primary{grid-column:1/-1}.assignment-actions .assignment-action{width:100%;padding:11px 10px}.assignment-actions .assignment-action-secondary:only-child{grid-column:1/-1}}
