@@ -213,6 +213,30 @@ if($action==='change_password'){
 }
 if(!$isLoggedIn)respond(401,['error'=>'Необходимо войти']);
 require_once __DIR__.'/assignments.php';
+if($action==='image_upload'){
+ if($method!=='POST')respond(405,['error'=>'Метод не поддерживается']);
+ if(!$isAdmin)respond(403,['error'=>'Загружать изображения может только суперадминистратор']);
+ $file=$_FILES['image']??null;
+ if(!is_array($file)||is_array($file['error']??null))respond(422,['error'=>'Выберите изображение для загрузки']);
+ if(($file['error']??UPLOAD_ERR_NO_FILE)!==UPLOAD_ERR_OK){
+  $tooLarge=in_array($file['error']??null,[UPLOAD_ERR_INI_SIZE,UPLOAD_ERR_FORM_SIZE],true);
+  respond($tooLarge?413:422,['error'=>$tooLarge?'Изображение превышает лимит загрузки сервера':'Не удалось загрузить изображение']);
+ }
+ $size=(int)($file['size']??0);$tmp=(string)($file['tmp_name']??'');
+ if($size<1||$size>2*1024*1024)respond(413,['error'=>'Максимальный размер изображения — 2 МБ']);
+ if(!is_uploaded_file($tmp))respond(422,['error'=>'Некорректный файл']);
+ $mime=(new finfo(FILEINFO_MIME_TYPE))->file($tmp);
+ $extensions=['image/png'=>'png','image/jpeg'=>'jpg','image/webp'=>'webp','image/gif'=>'gif'];
+ if(!isset($extensions[$mime]))respond(422,['error'=>'Поддерживаются PNG, JPEG, WebP и GIF']);
+ $info=@getimagesize($tmp);
+ if($info===false||($info['mime']??'')!==$mime||($info[0]??0)<1||($info[1]??0)<1||$info[0]>10000||$info[1]>10000)respond(422,['error'=>'Некорректное изображение или слишком большие размеры']);
+ $directory=__DIR__.'/../media/images';
+ if(!is_dir($directory)&&!mkdir($directory,0755,true)&&!is_dir($directory))respond(500,['error'=>'Не удалось создать каталог изображений']);
+ $filename=bin2hex(random_bytes(16)).'.'.$extensions[$mime];$destination=$directory.'/'.$filename;
+ if(!move_uploaded_file($tmp,$destination))respond(500,['error'=>'Не удалось сохранить изображение']);
+ chmod($destination,0644);
+ respond(201,['url'=>'/media/images/'.$filename]);
+}
 if($action==='my_schools' && $method==='GET'){
  if($isAdmin){$q=$db->query('SELECT id,name,description,NULL AS current_stage_name FROM schools ORDER BY name COLLATE NOCASE');respond(200,['schools'=>$q->fetchAll(PDO::FETCH_ASSOC)]);}
  $q=$db->prepare("SELECT s.id,s.name,s.description,st.name AS current_stage_name FROM schools s JOIN school_memberships m ON m.school_id=s.id LEFT JOIN stages st ON st.id=m.current_stage_id AND st.school_id=s.id WHERE m.user_id=? ORDER BY s.name");$q->execute([$adminId]);respond(200,['schools'=>$q->fetchAll(PDO::FETCH_ASSOC)]);

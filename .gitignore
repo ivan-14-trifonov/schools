@@ -10,3 +10,6 @@
 *.log
 *.key
 *.pem
+
+# User-uploaded lesson images
+/media/images/

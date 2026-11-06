@@ -44,3 +44,4 @@ textarea{width:100%;padding:13px 14px;font:inherit;border:1px solid #cbd5e1;bord
 .assignment-action:focus-visible{outline:3px solid #93b4f7;outline-offset:2px}
 .assignment-action:disabled{opacity:.6;cursor:wait}
 @media(max-width:540px){.assignment-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.assignment-actions .assignment-action-primary{grid-column:1/-1}.assignment-actions .assignment-action{width:100%;padding:11px 10px}.assignment-actions .assignment-action-secondary:only-child{grid-column:1/-1}}
+.lesson-html img{max-width:100%;height:auto}.jodit-wysiwyg img{max-width:100%;height:auto}

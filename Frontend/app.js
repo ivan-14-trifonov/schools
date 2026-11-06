@@ -92,10 +92,48 @@ async function lessonEditor(lesson,subject){
    if(url.protocol!=='https:'&&!(url.origin===location.origin&&url.pathname.startsWith('/media/'))){notice('Разрешены HTTPS-ссылки и внутренние /media/',true);return;}
    const audio=document.createElement('audio');audio.controls=true;audio.preload='metadata';audio.src=url.href;editor.selection.insertHTML('<p>'+audio.outerHTML+'</p>');dirty=true;
   }));
+  let pendingImages=0;
+  const imageInput=document.createElement('input');imageInput.type='file';imageInput.accept='image/png,image/jpeg,image/webp,image/gif';imageInput.multiple=true;imageInput.hidden=true;mediaControls.append(imageInput);
+  const pickImages=button('Вставить изображение',()=>imageInput.click());mediaControls.append(pickImages);
+  const insertImages=async files=>{
+   const images=Array.from(files||[]).filter(file=>file&&file.type.startsWith('image/'));
+   if(!images.length)return;
+   const selection=document.getSelection();let savedRange=selection&&selection.rangeCount&&editor.editor.contains(selection.anchorNode)?selection.getRangeAt(0).cloneRange():null;
+   pendingImages++;save.disabled=true;pickImages.disabled=true;message.textContent='Загрузка изображений…';
+   try{
+    for(const image of images){
+     if(image.size>2*1024*1024)throw Error('Изображение «'+image.name+'» больше 2 МБ');
+     const formData=new FormData();formData.append('image',image,image.name||'clipboard.png');
+     const response=await fetch(api+'?action=image_upload',{method:'POST',body:formData});const data=await response.json();
+     if(!response.ok||typeof data.url!=='string'||!/^\/media\/images\/[a-f0-9]{32}\.(png|jpg|webp|gif)$/.test(data.url))throw Error(data.error||'Не удалось загрузить изображение');
+     if(!overlay.isConnected)break;
+     if(savedRange&&savedRange.startContainer.isConnected&&editor.editor.contains(savedRange.commonAncestorContainer)){
+      selection.removeAllRanges();selection.addRange(savedRange);
+     }
+     const img=document.createElement('img');img.src=data.url;img.alt=image.name&&image.name!=='image.png'&&!image.name.startsWith('image.')?image.name:'';
+     editor.selection.insertHTML(img.outerHTML);dirty=true;
+     const current=document.getSelection();if(current&&current.rangeCount) {
+      const next=current.getRangeAt(0);
+      if(editor.editor.contains(next.commonAncestorContainer))savedRange=next.cloneRange();
+     }
+    }
+    message.textContent='Изображения вставлены. Нажмите «Сохранить», чтобы добавить их в урок.';
+   }catch(err){message.textContent='Ошибка загрузки изображения: '+err.message;notice(err.message,true);}
+   finally{pendingImages--;save.disabled=pendingImages>0;pickImages.disabled=pendingImages>0;}
+  };
+  imageInput.addEventListener('change',()=>{const images=Array.from(imageInput.files||[]);imageInput.value='';insertImages(images);});
+  editor.container.addEventListener('paste',e=>{
+   const files=Array.from(e.clipboardData?.items||[]).filter(item=>item.kind==='file'&&item.type.startsWith('image/')).map(item=>item.getAsFile()).filter(Boolean);
+   if(files.length){e.preventDefault();e.stopImmediatePropagation();insertImages(files);}
+  },true);
+  editor.container.addEventListener('drop',e=>{
+   const files=Array.from(e.dataTransfer?.files||[]).filter(file=>file.type.startsWith('image/'));
+   if(files.length){e.preventDefault();e.stopImmediatePropagation();insertImages(files);}
+  },true);
   save.disabled=false;
  }catch(err){message.textContent='Не удалось открыть HTML-редактор: '+err.message;return;}
- form.addEventListener('submit',async e=>{e.preventDefault();if(!editor||saving)return;saving=true;save.disabled=true;
-  try{const html=window.DOMPurify.sanitize(editor.value,{FORBID_TAGS:['script','iframe','form','style'],FORBID_ATTR:['style']});const stage_ids=checks.filter(([input])=>input.checked).map(([,stage])=>Number(stage.id));
+ form.addEventListener('submit',async e=>{e.preventDefault();if(!editor||saving||save.disabled)return;saving=true;save.disabled=true;
+  try{const html=window.DOMPurify.sanitize(editor.value,{FORBID_TAGS:['script','iframe','form','style'],FORBID_ATTR:['style']});if(Array.from(new DOMParser().parseFromString(html,'text/html').images).some(img=>/^(data|blob):/i.test(img.getAttribute('src')||'')))throw Error('Изображение из буфера не загружено на сервер. Вставьте его через кнопку «Вставить изображение».');const stage_ids=checks.filter(([input])=>input.checked).map(([,stage])=>Number(stage.id));
    const content_blocks=html.trim()?[{type:'html',html}]:[];
    await request('lessons',lesson?'PUT':'POST',lesson?{id:lesson.id,name:name.value.trim(),content_blocks,stage_ids}:{subject_id:subject.id,name:name.value.trim(),content_blocks,stage_ids});
    dirty=false;editor.destruct();overlay.remove();await loadSubjects();notice(lesson?'Урок изменён':'Урок добавлен');
