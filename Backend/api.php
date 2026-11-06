@@ -211,7 +211,8 @@ if($action==='change_password'){
 }
 if(!$isLoggedIn)respond(401,['error'=>'Необходимо войти']);
 require_once __DIR__.'/assignments.php';
-if(!$isAdmin && $action==='my_schools' && $method==='GET'){
+if($action==='my_schools' && $method==='GET'){
+ if($isAdmin){$q=$db->query('SELECT id,name,description,NULL AS current_stage_name FROM schools ORDER BY name COLLATE NOCASE');respond(200,['schools'=>$q->fetchAll(PDO::FETCH_ASSOC)]);}
  $q=$db->prepare("SELECT s.id,s.name,s.description,CASE m.stage_access_override WHEN 'all' THEN 'Все этапы' WHEN 'none' THEN 'Нет этапа' ELSE st.name END AS current_stage_name FROM schools s JOIN school_memberships m ON m.school_id=s.id LEFT JOIN stages st ON st.id=m.current_stage_id AND st.school_id=s.id WHERE m.user_id=? ORDER BY s.name");$q->execute([$adminId]);respond(200,['schools'=>$q->fetchAll(PDO::FETCH_ASSOC)]);
 }
 if(!$isAdmin && $method==='GET' && in_array($action,['schools','subjects','lessons','stages'],true)){
