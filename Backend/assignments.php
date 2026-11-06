@@ -88,18 +88,41 @@ if($action==='assignment_update'){
  }catch(Throwable $e){if($db->inTransaction())$db->rollBack();throw $e;}
  respond(200,['ok'=>true]);
 }
+function answerReceipt(PDO $db,int $answerId,int $userId): array {
+ $q=$db->prepare('SELECT aa.id,aa.assignment_id,aa.answer_text,aa.submitted_at,aa.version_id,av.version,av.type,av.schema_json FROM assignment_answers aa LEFT JOIN assignment_versions av ON av.id=aa.version_id WHERE aa.id=? AND aa.user_id=?');
+ $q->execute([$answerId,$userId]);$row=$q->fetch(PDO::FETCH_ASSOC);
+ if(!$row)respond(404,['error'=>'Ответ не найден']);
+ return ['id'=>(int)$row['id'],'assignment_id'=>(int)$row['assignment_id'],'answer_text'=>$row['answer_text'],'submitted_at'=>$row['submitted_at'],'version_id'=>(int)$row['version_id'],'version'=>$row['version']===null?null:(int)$row['version'],'type'=>$row['type'],'fields'=>$row['schema_json']===null?null:json_decode($row['schema_json'],true)];
+}
+if($action==='answer_latest'){
+ if($method!=='GET')respond(405,['error'=>'Метод не поддерживается']);
+ $id=numericId($_GET['assignment_id']??'');$a=assignmentDetails($db,$id);
+ if(!assignmentReadable($db,$a,$adminId,$isAdmin))respond(403,['error'=>'Нет доступа к заданию']);
+ $q=$db->prepare('SELECT id FROM assignment_answers WHERE assignment_id=? AND user_id=? ORDER BY id DESC LIMIT 1');$q->execute([$id,$adminId]);$answerId=$q->fetchColumn();
+ respond(200,['answer'=>$answerId===false?null:answerReceipt($db,(int)$answerId,$adminId)]);
+}
 if($action==='answer_submit'){
  if($method!=='POST')respond(405,['error'=>'Метод не поддерживается']);
  $b=json_decode(file_get_contents('php://input'),true);if(!is_array($b))respond(400,['error'=>'Некорректные данные']);
  $id=numericId($b['assignment_id']??'');$a=assignmentDetails($db,$id);
  if(!assignmentReadable($db,$a,$adminId,$isAdmin))respond(403,['error'=>'Нет доступа к заданию']);
+ $key=$b['request_key']??null;
+ if(!is_string($key)||!preg_match('/^[a-f0-9]{32}$/D',$key))respond(422,['error'=>'Некорректный идентификатор отправки']);
+ $q=$db->prepare('SELECT id,assignment_id FROM assignment_answers WHERE request_key=? AND user_id=?');$q->execute([$key,$adminId]);$existing=$q->fetch(PDO::FETCH_ASSOC);
+ if($existing){if((int)$existing['assignment_id']!==$id)respond(409,['error'=>'Идентификатор отправки уже использован']);respond(200,['ok'=>true,'duplicate'=>true,'answer'=>answerReceipt($db,(int)$existing['id'],$adminId)]);}
  $q=$db->prepare('SELECT id,type,schema_json FROM assignment_versions WHERE assignment_id=? ORDER BY version DESC LIMIT 1');$q->execute([$id]);$version=$q->fetch(PDO::FETCH_ASSOC);
  if(!$version)respond(409,['error'=>'Версия задания не найдена']);
  if((int)($b['version_id']??0)!==(int)$version['id'])respond(409,['error'=>'Задание изменилось. Обновите страницу и отправьте ответ заново.']);
  $schema=$version['type']==='composite_question'?json_decode($version['schema_json'],true):null;
  if($schema!==null){$answer=json_encode(validateCompositeAnswer($schema,$b['values']??null),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR);}else{$answer=trim((string)($b['answer_text']??''));if($answer===''||mb_strlen($answer)>20000)respond(422,['error'=>'Ответ должен содержать от 1 до 20000 символов']);}
- $q=$db->prepare('INSERT INTO assignment_answers(assignment_id,user_id,answer_text,version_id) VALUES(?,?,?,?)');$q->execute([$id,$adminId,$answer,$version['id']]);
- respond(201,['ok'=>true,'id'=>(int)$db->lastInsertId()]);
+ try{$q=$db->prepare('INSERT INTO assignment_answers(assignment_id,user_id,answer_text,version_id,request_key) VALUES(?,?,?,?,?)');$q->execute([$id,$adminId,$answer,$version['id'],$key]);$answerId=(int)$db->lastInsertId();}
+ catch(PDOException $e){
+  $q=$db->prepare('SELECT id,assignment_id FROM assignment_answers WHERE request_key=? AND user_id=?');$q->execute([$key,$adminId]);$existing=$q->fetch(PDO::FETCH_ASSOC);
+  if(!$existing)throw $e;
+  if((int)$existing['assignment_id']!==$id)respond(409,['error'=>'Идентификатор отправки уже использован']);
+  respond(200,['ok'=>true,'duplicate'=>true,'answer'=>answerReceipt($db,(int)$existing['id'],$adminId)]);
+ }
+ respond(201,['ok'=>true,'duplicate'=>false,'answer'=>answerReceipt($db,$answerId,$adminId)]);
 }
 if($action==='answer_delete'){
  if($method!=='DELETE')respond(405,['error'=>'Метод не поддерживается']);
