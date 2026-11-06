@@ -101,6 +101,16 @@ if($action==='answer_submit'){
  $q=$db->prepare('INSERT INTO assignment_answers(assignment_id,user_id,answer_text,version_id) VALUES(?,?,?,?)');$q->execute([$id,$adminId,$answer,$version['id']]);
  respond(201,['ok'=>true,'id'=>(int)$db->lastInsertId()]);
 }
+if($action==='answer_delete'){
+ if($method!=='DELETE')respond(405,['error'=>'Метод не поддерживается']);
+ if(!$isAdmin)respond(403,['error'=>'Удалять отправленные ответы может только суперадминистратор']);
+ $body=json_decode(file_get_contents('php://input'),true);
+ if(!is_array($body))respond(400,['error'=>'Некорректные данные']);
+ $id=numericId($body['id']??null);
+ $q=$db->prepare('DELETE FROM assignment_answers WHERE id=?');$q->execute([$id]);
+ if($q->rowCount()!==1)respond(404,['error'=>'Отправленный ответ не найден']);
+ respond(200,['ok'=>true]);
+}
 if($action==='answers'){
  if($method!=='GET')respond(405,['error'=>'Метод не поддерживается']);
  $scope=(string)($_GET['scope']??'own');if(!in_array($scope,['own','all'],true))respond(422,['error'=>'Неверный режим просмотра']);
