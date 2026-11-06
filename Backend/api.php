@@ -35,6 +35,7 @@ function validatedLessonBlocks(mixed $raw): string {
  $out=[];foreach($raw as $b){
   if(!is_array($b)||!isset($b['type'])||!is_string($b['type']))respond(422,['error'=>'Неизвестный блок']);
   if($b['type']==='markdown'){$value=$b['text']??null;if(!is_string($value))respond(422,['error'=>'Некорректный Markdown']);if($value==='')continue;if($out&&$out[count($out)-1]['type']==='markdown')$out[count($out)-1]['text'].=$value;else $out[]=['type'=>'markdown','text'=>$value];}
+  elseif($b['type']==='html'){$html=$b['html']??null;if(!is_string($html)||strlen($html)>400000)respond(422,['error'=>'Некорректное HTML-содержимое урока']);$out[]=['type'=>'html','html'=>$html];}
   elseif($b['type']==='audio'){$src=$b['src']??null;if(!is_string($src)||strlen($src)>2048||!preg_match('~^(?:/media/[a-zA-Z0-9_./-]+|https://[^\\s]+)$~',$src))respond(422,['error'=>'Некорректная ссылка на аудио']);$out[]=['type'=>'audio','src'=>$src];}
   else respond(422,['error'=>'Неподдерживаемый тип блока']);
  }
