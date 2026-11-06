@@ -230,7 +230,7 @@ if(!$isLoggedIn)respond(401,['error'=>'Необходимо войти']);
 if($action==='lesson_manage_rights'){
  if($method!=='GET')respond(405,['error'=>'Метод не поддерживается']);
  $school=numericId($_GET['school_id']??'');
- respond(200,['can_manage'=>hasPermission($db,$adminId,$school,'lessons.manage')]);
+ respond(200,['can_manage'=>hasPermission($db,$adminId,$school,'lessons.manage'),'can_create_subjects'=>hasPermission($db,$adminId,$school,'subjects.manage')]);
 }
 require_once __DIR__.'/assignments.php';
 if($action==='image_upload'){
@@ -286,7 +286,7 @@ if(!$isAdmin && $method==='GET' && in_array($action,['schools','subjects','lesso
  if($action==='lessons'){$q=$db->prepare("SELECT DISTINCT l.id,l.subject_id,l.name,l.content_json FROM lessons l JOIN lesson_stages ls ON ls.lesson_id=l.id WHERE l.subject_id=? AND ls.stage_id IN ($slots) ORDER BY l.id");$q->execute(array_merge([$subject],$allowed));$rows=$q->fetchAll(PDO::FETCH_ASSOC);foreach($rows as &$row){$get=$db->prepare('SELECT stage_id FROM lesson_stages WHERE lesson_id=?');$get->execute([$row['id']]);$row['stage_ids']=array_values(array_intersect(array_map('intval',$get->fetchAll(PDO::FETCH_COLUMN)),$allowed));$row['content_blocks']=json_decode($row['content_json']??'[]',true);unset($row['content_json']);}respond(200,['lessons'=>$rows]);}
  if($action==='subjects'){$q=$db->prepare("SELECT DISTINCT s.id,s.school_id,s.name FROM subjects s JOIN lessons l ON l.subject_id=s.id JOIN lesson_stages ls ON ls.lesson_id=l.id WHERE s.school_id=? AND ls.stage_id IN ($slots) ORDER BY s.id");$q->execute(array_merge([$sid],$allowed));respond(200,['subjects'=>$q->fetchAll(PDO::FETCH_ASSOC)]);}
 }
-if(!$isAdmin && !($action==='lessons'&&in_array($method,['POST','PUT','DELETE'],true)))respond(403,['error'=>'Недостаточно прав']);
+if(!$isAdmin && !(($action==='lessons'&&in_array($method,['POST','PUT','DELETE'],true))||($action==='subjects'&&$method==='POST')))respond(403,['error'=>'Недостаточно прав']);
 
 if($action==='members'){
  if($method==='GET'){
@@ -372,11 +372,14 @@ function updateLessonStages(PDO $db,int $lessonId,array $body): void {
 }
 if(in_array($action,['subjects','lessons'],true)){
  if(!$isAdmin){
-  if($action!=='lessons')respond(403,['error'=>'Недостаточно прав']);
-  if($method==='POST'){
+  if($action==='subjects'){
+   if($method!=='POST')respond(403,['error'=>'Преподавателю доступно только создание предметов']);
+   $schoolId=numericId($body['school_id']??'');
+   if(!hasPermission($db,$adminId,$schoolId,'subjects.manage'))respond(403,['error'=>'Нет прав создания предметов этой школы']);
+  }elseif($action==='lessons'&&$method==='POST'){
    $subjectId=numericId($body['subject_id']??'');$q=$db->prepare('SELECT school_id FROM subjects WHERE id=?');$q->execute([$subjectId]);$schoolId=(int)$q->fetchColumn();
    if(!$schoolId||!hasPermission($db,$adminId,$schoolId,'lessons.manage'))respond(403,['error'=>'Нет прав редактирования уроков этой школы']);
-  }else{
+  }elseif($action==='lessons'){
    $lessonId=numericId($body['id']??'');if(!canManageLesson($db,$adminId,$lessonId))respond(403,['error'=>'Нет прав редактирования этого урока']);
   }
  }
