@@ -76,7 +76,7 @@ if($action==='assignment_create'){
  try{
   $q=$db->prepare('INSERT INTO assignments(lesson_id,type,title,question) VALUES(?,?,?,?)');$q->execute([$lid,'simple_question',$title,$question]);$id=(int)$db->lastInsertId();if($schema!==null){$q=$db->prepare('INSERT INTO composite_questions(assignment_id,schema_json) VALUES(?,?)');$q->execute([$id,$schema]);}
   $q=$db->prepare('INSERT INTO assignment_versions(assignment_id,version,title,question,type,schema_json) VALUES(?,1,?,?,?,?)');$q->execute([$id,$title,$question,$type,$schema]);
-  $q=$db->prepare('SELECT content_json FROM lessons WHERE id=?');$q->execute([$lid]);$blocks=json_decode((string)$q->fetchColumn(),true)?:[];$blocks[]=['type'=>'markdown','text'=>"\n\n[assignment](/assignments/$id)\n"];$q=$db->prepare('UPDATE lessons SET content_json=? WHERE id=?');$q->execute([validatedLessonBlocks($blocks),$lid]);
+  $q=$db->prepare('SELECT content_json FROM lessons WHERE id=?');$q->execute([$lid]);$blocks=json_decode((string)$q->fetchColumn(),true)?:[];$html=(string)($blocks[0]['html']??'');$html.="\n<p><a href=\"/assignments/$id\">assignment</a></p>\n";$q=$db->prepare('UPDATE lessons SET content_json=? WHERE id=?');$q->execute([validatedLessonBlocks([['type'=>'html','html'=>$html]]),$lid]);
   $db->commit();
  }catch(Throwable $e){$db->rollBack();throw $e;}
  respond(201,['id'=>$id,'ok'=>true]);

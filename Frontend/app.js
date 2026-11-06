@@ -48,16 +48,15 @@ async function loadSubjects(){subjects=[];lessons={};if(active()){subjects=(awai
 async function loadStages(){stages=[];if(active())stages=(await request('stages','GET',null,{school_id:selected})).stages;renderStages();}
 function renderStages(){renderSchools();}
 document.addEventListener('play',event=>{if(!(event.target instanceof HTMLAudioElement))return;document.querySelectorAll('audio').forEach(audio=>{if(audio!==event.target&&!audio.paused)audio.pause();});},true);
-function renderMarkdown(source,target){
- if(window.marked && window.DOMPurify){const dirty=window.marked.parse(source,{gfm:true,breaks:false});target.innerHTML=window.DOMPurify.sanitize(dirty,{USE_PROFILES:{html:true},FORBID_TAGS:['iframe','style','script','form'],FORBID_ATTR:['style']});target.querySelectorAll('a').forEach(a=>{a.target='_blank';a.rel='noopener noreferrer';if(a.textContent.trim().toLowerCase()!=='audio'||a.children.length)return;let url;try{url=new URL(a.getAttribute('href'),location.href);}catch{return;}if(url.protocol!=='https:' && !(url.origin===location.origin && url.pathname.startsWith('/media/')))return;const player=document.createElement('audio');player.controls=true;player.preload='metadata';player.src=url.href;player.setAttribute('aria-label','Аудиозапись');a.replaceWith(player);});}
- else{target.textContent=source;}
+function renderLessonBlocks(blocks,target){
+ target.replaceChildren();const node=element('div',undefined,'lesson-html');
+ if(!window.DOMPurify){node.textContent='Не удалось загрузить библиотеку очистки HTML';target.append(node);return;}
+ const html=blocks?.[0]?.type==='html'?blocks[0].html:'';
+ node.innerHTML=window.DOMPurify.sanitize(html,{FORBID_TAGS:['script','iframe','form','style'],FORBID_ATTR:['style']});
+ node.querySelectorAll('a').forEach(a=>{a.target='_blank';a.rel='noopener noreferrer';});
+ node.querySelectorAll('audio').forEach(audio=>{const src=audio.getAttribute('src')||'';let url;try{url=new URL(src,location.origin);}catch{audio.remove();return;}if(url.protocol!=='https:'&&!(url.origin===location.origin&&url.pathname.startsWith('/media/')))audio.remove();else{audio.controls=true;audio.preload='metadata';}});
+ renderAssignmentLinks(node);target.append(node);
 }
-const lessonBlockHandlers={
- html:{render(block,target){const node=element('div',undefined,'markdown-content');if(!window.DOMPurify){node.textContent='Для отображения HTML требуется библиотека очистки';target.append(node);return;}node.innerHTML=window.DOMPurify.sanitize(block.html||'',{FORBID_TAGS:['script','iframe','form','style'],FORBID_ATTR:['style']});node.querySelectorAll('a').forEach(a=>{a.target='_blank';a.rel='noopener noreferrer';});node.querySelectorAll('audio').forEach(audio=>{const src=audio.getAttribute('src')||'';let url;try{url=new URL(src,location.origin);}catch{audio.remove();return;}if(url.protocol!=='https:'&&!(url.origin===location.origin&&url.pathname.startsWith('/media/')))audio.remove();else{audio.controls=true;audio.preload='metadata';}});renderAssignmentLinks(node);target.append(node);}},
- markdown:{render(block,target){const node=element('div',undefined,'markdown-content');renderMarkdown(block.text,node);renderAssignmentLinks(node);target.append(node);}},
- audio:{render(block,target){const player=document.createElement('audio');player.controls=true;player.preload='metadata';player.src=block.src;player.setAttribute('aria-label','Аудиозапись');target.append(player);}}
-};
-function renderLessonBlocks(blocks,target){target.replaceChildren();for(const b of blocks||[]){const handler=lessonBlockHandlers[b.type];if(handler)handler.render(b,target);}}
 let joditAssetPromise;
 function loadJoditEditor(){
  if(window.Jodit)return Promise.resolve();
@@ -68,29 +67,11 @@ function loadJoditEditor(){
  }).catch(err=>{joditAssetPromise=null;throw err;});
  return joditAssetPromise;
 }
-function lessonBlocksAsHtml(blocks){
- const fragments=[];
- (blocks||[]).forEach(block=>{
-  if(block.type==='markdown'){
-   if(!window.marked||!window.DOMPurify)throw Error('Не удалось загрузить библиотеки Markdown и очистки HTML: конвертация отменена');
-   const parsed=window.marked.parse(block.text||'');
-   const safe=window.DOMPurify.sanitize(parsed,{USE_PROFILES:{html:true},FORBID_TAGS:['iframe','script','style','form'],FORBID_ATTR:['style']});
-   fragments.push(safe);
-  }else if(block.type==='audio'){
-   const audio=document.createElement('audio');audio.controls=true;audio.preload='metadata';
-   const src=String(block.src||'');let url;
-   try{url=new URL(src,location.origin);}catch{return;}
-   if(url.protocol!=='https:'&&!(url.origin===location.origin&&url.pathname.startsWith('/media/')))return;
-   audio.src=url.href;fragments.push('<p>'+audio.outerHTML+'</p>');
-  }
- });
- return fragments.join('\n');
-}
 async function lessonEditor(lesson,subject){
  if(!isAdmin)return;
- const overlay=element('div',undefined,'editor-overlay'),form=element('form',undefined,'editor-card editor-lab-card');
+ const overlay=element('div',undefined,'editor-overlay'),form=element('form',undefined,'editor-card lesson-wysiwyg-card');
  const heading=element('h2',lesson?'Изменить урок':'Добавить урок');const titleLabel=element('label','Название урока');const name=document.createElement('input');name.required=true;name.maxLength=120;name.value=lesson?.name||'';titleLabel.append(name);
- const editorHeading=element('h3','Содержание урока');const host=element('div',undefined,'editor-lab-host');const message=element('p','Загрузка визуального редактора…','muted small');
+ const editorHeading=element('h3','Содержание урока');const host=element('div',undefined,'lesson-wysiwyg-host');const message=element('p','Загрузка визуального редактора…','muted small');
  const mediaControls=element('div',undefined,'actions');const group=element('fieldset',undefined,'stage-fieldset');group.append(element('legend','Этапы обучения'));
  const checks=[];stages.forEach(stage=>{const label=element('label',undefined,'stage-option');const input=document.createElement('input');input.type='checkbox';input.checked=!!lesson?.stage_ids?.some(id=>Number(id)===Number(stage.id));label.append(input,element('span',stage.name));group.append(label);checks.push([input,stage]);});
  if(!stages.length)group.append(element('p','Этапов пока нет. Добавьте их в настройках.','muted small'));
@@ -103,7 +84,7 @@ async function lessonEditor(lesson,subject){
   await loadJoditEditor();if(!overlay.isConnected)return;
   const textarea=document.createElement('textarea');host.append(textarea);
   editor=window.Jodit.make(textarea,{height:500,toolbarAdaptive:false,buttons:['undo','redo','|','bold','italic','underline','strikethrough','|','ul','ol','|','paragraph','|','link','table','hr','|','source']});
-  const firstHtml=lesson?.content_blocks?.length===1&&lesson.content_blocks[0].type==='html'?lesson.content_blocks[0].html:lessonBlocksAsHtml(lesson?.content_blocks||[]);
+  const firstHtml=lesson?.content_blocks?.[0]?.html||'';
   editor.value=window.DOMPurify.sanitize(firstHtml,{FORBID_TAGS:['script','iframe','form','style'],FORBID_ATTR:['style']});
   editor.events.on('change',()=>{dirty=true;});
   message.textContent='Визуальное редактирование HTML. Аудиозаписи и ссылки на задания сохраняются внутри урока.';

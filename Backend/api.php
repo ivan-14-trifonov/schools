@@ -17,34 +17,20 @@ if(!in_array('description',array_column($cols,'name'),true))$db->exec("ALTER TAB
 $db->exec('CREATE TABLE IF NOT EXISTS subjects (id INTEGER PRIMARY KEY AUTOINCREMENT, school_id INTEGER NOT NULL REFERENCES schools(id) ON DELETE CASCADE, name TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)');
 $db->exec('CREATE TABLE IF NOT EXISTS lessons (id INTEGER PRIMARY KEY AUTOINCREMENT, subject_id INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE, name TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)');
 $db->exec('CREATE TABLE IF NOT EXISTS stages (id INTEGER PRIMARY KEY AUTOINCREMENT, school_id INTEGER NOT NULL REFERENCES schools(id) ON DELETE CASCADE, name TEXT NOT NULL, position INTEGER NOT NULL DEFAULT 0)');
-$mdCols=$db->query('PRAGMA table_info(lessons)')->fetchAll(PDO::FETCH_ASSOC);
-if(!in_array('content_md',array_column($mdCols,'name'),true))$db->exec("ALTER TABLE lessons ADD COLUMN content_md TEXT NOT NULL DEFAULT ''");
 $blockCols=$db->query('PRAGMA table_info(lessons)')->fetchAll(PDO::FETCH_ASSOC);
 if(!in_array('content_json',array_column($blockCols,'name'),true))$db->exec("ALTER TABLE lessons ADD COLUMN content_json TEXT");
-function legacyBlocks(string $source): array {
- $parts=preg_split('~(?m)^[ \\t]*\\[audio\\]\\(([^\\r\\n)]+)\\)[ \\t]*(?:\\r?\\n|$)~u',$source,-1,PREG_SPLIT_DELIM_CAPTURE);
- if($parts===false)return [['type'=>'markdown','text'=>$source]];
- $blocks=[];foreach($parts as $index=>$part) {
-  if($index%2===0){if($part!=='')$blocks[]=['type'=>'markdown','text'=>$part];}
-  else $blocks[]=['type'=>'audio','src'=>$part];
- }
- return $blocks;
-}
 function validatedLessonBlocks(mixed $raw): string {
  if(!is_array($raw)||!array_is_list($raw)||count($raw)>500)respond(422,['error'=>'Некорректный список блоков']);
  $out=[];foreach($raw as $b){
-  if(!is_array($b)||!isset($b['type'])||!is_string($b['type']))respond(422,['error'=>'Неизвестный блок']);
-  if($b['type']==='markdown'){$value=$b['text']??null;if(!is_string($value))respond(422,['error'=>'Некорректный Markdown']);if($value==='')continue;if($out&&$out[count($out)-1]['type']==='markdown')$out[count($out)-1]['text'].=$value;else $out[]=['type'=>'markdown','text'=>$value];}
-  elseif($b['type']==='html'){$html=$b['html']??null;if(!is_string($html)||strlen($html)>400000)respond(422,['error'=>'Некорректное HTML-содержимое урока']);$out[]=['type'=>'html','html'=>$html];}
-  elseif($b['type']==='audio'){$src=$b['src']??null;if(!is_string($src)||strlen($src)>2048||!preg_match('~^(?:/media/[a-zA-Z0-9_./-]+|https://[^\\s]+)$~',$src))respond(422,['error'=>'Некорректная ссылка на аудио']);$out[]=['type'=>'audio','src'=>$src];}
-  else respond(422,['error'=>'Неподдерживаемый тип блока']);
+  if(!is_array($b)||($b['type']??null)!=='html')respond(422,['error'=>'Содержимое урока должно быть в HTML']);
+  $html=$b['html']??null;if(!is_string($html)||strlen($html)>400000)respond(422,['error'=>'Некорректное HTML-содержимое урока']);
+  $out[]=['type'=>'html','html'=>$html];
  }
+ if(count($out)>1)respond(422,['error'=>'Урок должен содержать один HTML-документ']);
  $json=json_encode($out,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR);
  if(strlen($json)>500000)respond(422,['error'=>'Содержимое урока слишком длинное']);
  return $json;
 }
-$legacyRows=$db->query('SELECT id,content_md FROM lessons WHERE content_json IS NULL')->fetchAll(PDO::FETCH_ASSOC);
-if($legacyRows){$db->beginTransaction();try{$update=$db->prepare('UPDATE lessons SET content_json=? WHERE id=? AND content_json IS NULL');foreach($legacyRows as $r)$update->execute([json_encode(legacyBlocks($r['content_md']),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR),$r['id']]);$db->commit();}catch(Throwable $e){$db->rollBack();throw $e;}}
 $db->exec('CREATE TABLE IF NOT EXISTS lesson_stages (lesson_id INTEGER NOT NULL REFERENCES lessons(id) ON DELETE CASCADE, stage_id INTEGER NOT NULL REFERENCES stages(id) ON DELETE CASCADE, PRIMARY KEY(lesson_id,stage_id))');
 $stageCols=$db->query('PRAGMA table_info(stages)')->fetchAll(PDO::FETCH_ASSOC);
 if(!in_array('invite_code',array_column($stageCols,'name'),true))$db->exec('ALTER TABLE stages ADD COLUMN invite_code TEXT');
