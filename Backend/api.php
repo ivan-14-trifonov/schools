@@ -64,6 +64,9 @@ $db->exec('CREATE INDEX IF NOT EXISTS idx_answers_version ON assignment_answers(
 $answerCols=$db->query('PRAGMA table_info(assignment_answers)')->fetchAll(PDO::FETCH_ASSOC);
 if(!in_array('request_key',array_column($answerCols,'name'),true))$db->exec('ALTER TABLE assignment_answers ADD COLUMN request_key TEXT');
 $db->exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_answer_request_key ON assignment_answers(request_key)');
+$answerCols=$db->query('PRAGMA table_info(assignment_answers)')->fetchAll(PDO::FETCH_ASSOC);
+if(!in_array('stage_id',array_column($answerCols,'name'),true))$db->exec('ALTER TABLE assignment_answers ADD COLUMN stage_id INTEGER REFERENCES stages(id) ON DELETE SET NULL');
+$db->exec('CREATE INDEX IF NOT EXISTS idx_answer_stage ON assignment_answers(assignment_id,user_id,stage_id,id)');
 $unversioned=$db->query('SELECT a.id,a.title,a.question,c.schema_json FROM assignments a LEFT JOIN composite_questions c ON c.assignment_id=a.id WHERE NOT EXISTS(SELECT 1 FROM assignment_versions v WHERE v.assignment_id=a.id)')->fetchAll(PDO::FETCH_ASSOC);
 if($unversioned){$insertV=$db->prepare('INSERT INTO assignment_versions(assignment_id,version,title,question,type,schema_json) VALUES(?,1,?,?,?,?)');foreach($unversioned as $a)$insertV->execute([$a['id'],$a['title'],$a['question'],$a['schema_json']===null?'simple_question':'composite_question',$a['schema_json']]);}
 $db->exec('UPDATE assignment_answers SET version_id=(SELECT id FROM assignment_versions WHERE assignment_id=assignment_answers.assignment_id ORDER BY version LIMIT 1) WHERE version_id IS NULL');
@@ -71,6 +74,8 @@ $db->exec('UPDATE assignment_answers SET version_id=(SELECT id FROM assignment_v
 // Permissions are defined in code; roles and their grants are managed by platform admins.
 define('SCHOOL_PERMISSIONS', [
  'lessons.read'=>'Чтение уроков',
+ 'lessons.all.read'=>'Просмотр уроков всех этапов',
+ 'answers.submit'=>'Отправка ответов на задания своего этапа',
  'answers.own.read'=>'Просмотр своих ответов на задания',
  'answers.all.read'=>'Просмотр ответов всех студентов',
  'lessons.manage'=>'Управление уроками',
@@ -95,6 +100,15 @@ if(!$db->query('SELECT 1 FROM roles LIMIT 1')->fetchColumn()){
  $id=(int)$db->lastInsertId();$db->prepare('INSERT INTO role_permissions(role_id,permission) VALUES(?,?)')->execute([$id,'lessons.read']);$db->prepare('INSERT INTO role_permissions(role_id,permission) VALUES(?,?)')->execute([$id,'answers.own.read']);
 }
 $defaultRole=$db->query('SELECT id FROM roles WHERE is_default_student=1 LIMIT 1')->fetchColumn();
+$db->exec('CREATE TABLE IF NOT EXISTS app_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)');
+$permissionMigration='student-stage-permissions-v1';
+$q=$db->prepare('SELECT 1 FROM app_migrations WHERE name=?');$q->execute([$permissionMigration]);
+if(!$q->fetchColumn()){
+ $db->beginTransaction();try{
+  if($defaultRole){$addGrant=$db->prepare('INSERT OR IGNORE INTO role_permissions(role_id,permission) VALUES(?,?)');$addGrant->execute([(int)$defaultRole,'lessons.all.read']);$addGrant->execute([(int)$defaultRole,'answers.submit']);}
+  $db->prepare('INSERT OR IGNORE INTO app_migrations(name) VALUES(?)')->execute([$permissionMigration]);$db->commit();
+ }catch(Throwable $e){if($db->inTransaction())$db->rollBack();throw $e;}
+}
 if($defaultRole)$db->prepare('UPDATE schools SET invite_role_id=? WHERE invite_role_id IS NULL')->execute([(int)$defaultRole]);
 function hasPermission(PDO $db,int $userId,int $schoolId,string $permission): bool {
  $q=$db->prepare('SELECT 1 FROM users WHERE id=? AND is_platform_admin=1');$q->execute([$userId]);if($q->fetchColumn())return true;
@@ -105,7 +119,7 @@ function canSeeStage(PDO $db,int $userId,int $schoolId,int $stageId): bool {
  $q=$db->prepare('SELECT 1 FROM users WHERE id=? AND is_platform_admin=1');$q->execute([$userId]);if($q->fetchColumn())return true;
  if(!hasPermission($db,$userId,$schoolId,'lessons.read'))return false;
  $q=$db->prepare('SELECT m.current_stage_id,m.stage_access_override,s.stage_access_mode FROM school_memberships m JOIN schools s ON s.id=m.school_id WHERE m.user_id=? AND m.school_id=?');$q->execute([$userId,$schoolId]);$membership=$q->fetch(PDO::FETCH_ASSOC);if(!$membership||$membership['stage_access_override']==='none')return false;
- if($membership['stage_access_override']==='all')return true;
+ if($membership['stage_access_override']==='all'||hasPermission($db,$userId,$schoolId,'lessons.all.read'))return true;
  if(!$membership['current_stage_id'])return false;
  $q=$db->prepare('SELECT id,position FROM stages WHERE school_id=? AND id IN (?,?)');$q->execute([$schoolId,$stageId,$membership['current_stage_id']]);$positions=[];foreach($q->fetchAll(PDO::FETCH_ASSOC) as $row)$positions[(int)$row['id']]=(int)$row['position'];
  if(!isset($positions[$stageId],$positions[(int)$membership['current_stage_id']]))return false;
@@ -216,17 +230,17 @@ if(!$isLoggedIn)respond(401,['error'=>'Необходимо войти']);
 require_once __DIR__.'/assignments.php';
 if($action==='my_schools' && $method==='GET'){
  if($isAdmin){$q=$db->query('SELECT id,name,description,NULL AS current_stage_name FROM schools ORDER BY name COLLATE NOCASE');respond(200,['schools'=>$q->fetchAll(PDO::FETCH_ASSOC)]);}
- $q=$db->prepare("SELECT s.id,s.name,s.description,CASE m.stage_access_override WHEN 'all' THEN 'Все этапы' WHEN 'none' THEN 'Нет этапа' ELSE st.name END AS current_stage_name FROM schools s JOIN school_memberships m ON m.school_id=s.id LEFT JOIN stages st ON st.id=m.current_stage_id AND st.school_id=s.id WHERE m.user_id=? ORDER BY s.name");$q->execute([$adminId]);respond(200,['schools'=>$q->fetchAll(PDO::FETCH_ASSOC)]);
+ $q=$db->prepare("SELECT s.id,s.name,s.description,CASE WHEN m.stage_access_override='none' THEN 'Нет доступа' ELSE st.name END AS current_stage_name FROM schools s JOIN school_memberships m ON m.school_id=s.id LEFT JOIN stages st ON st.id=m.current_stage_id AND st.school_id=s.id WHERE m.user_id=? ORDER BY s.name");$q->execute([$adminId]);respond(200,['schools'=>$q->fetchAll(PDO::FETCH_ASSOC)]);
 }
 if(!$isAdmin && $method==='GET' && in_array($action,['schools','subjects','lessons','stages'],true)){
- if($action==='schools'){$q=$db->prepare("SELECT s.id,s.name,s.description,CASE m.stage_access_override WHEN 'all' THEN 'Все этапы' WHEN 'none' THEN 'Нет этапа' ELSE st.name END AS current_stage_name FROM schools s JOIN school_memberships m ON m.school_id=s.id LEFT JOIN stages st ON st.id=m.current_stage_id AND st.school_id=s.id WHERE m.user_id=? ORDER BY s.name");$q->execute([$adminId]);respond(200,['schools'=>$q->fetchAll(PDO::FETCH_ASSOC)]);}
+ if($action==='schools'){$q=$db->prepare("SELECT s.id,s.name,s.description,CASE WHEN m.stage_access_override='none' THEN 'Нет доступа' ELSE st.name END AS current_stage_name FROM schools s JOIN school_memberships m ON m.school_id=s.id LEFT JOIN stages st ON st.id=m.current_stage_id AND st.school_id=s.id WHERE m.user_id=? ORDER BY s.name");$q->execute([$adminId]);respond(200,['schools'=>$q->fetchAll(PDO::FETCH_ASSOC)]);}
  $sid=0;$subject=0;
  if($action==='lessons'){$subject=numericId($_GET['subject_id']??'');$q=$db->prepare('SELECT school_id FROM subjects WHERE id=?');$q->execute([$subject]);$sid=(int)$q->fetchColumn();}
  else{$sid=numericId($_GET['school_id']??'');}
  if(!$sid||!hasPermission($db,$adminId,$sid,'lessons.read'))respond(403,['error'=>'Нет доступа к школе']);
  $q=$db->prepare('SELECT m.current_stage_id,m.stage_access_override,s.stage_access_mode FROM school_memberships m JOIN schools s ON s.id=m.school_id WHERE m.user_id=? AND m.school_id=?');$q->execute([$adminId,$sid]);$membership=$q->fetch(PDO::FETCH_ASSOC);if(!$membership||$membership['stage_access_override']==='none')respond(200,[$action=>[]]);
  $q=$db->prepare('SELECT id,name,position FROM stages WHERE school_id=? ORDER BY position,id');$q->execute([$sid]);$allStages=$q->fetchAll(PDO::FETCH_ASSOC);$current=null;foreach($allStages as $st)if((int)$st['id']===(int)$membership['current_stage_id'])$current=(int)$st['position'];
- $allowed=[];if($membership['stage_access_override']==='all')$allowed=array_map(static fn($st)=>(int)$st['id'],$allStages);else if($current!==null)foreach($allStages as $st)if($membership['stage_access_mode']==='all'||($membership['stage_access_mode']==='previous'&&(int)$st['position']<=$current)||($membership['stage_access_mode']==='current'&&(int)$st['id']===(int)$membership['current_stage_id']))$allowed[]=(int)$st['id'];
+ $allowed=[];if($membership['stage_access_override']==='all'||hasPermission($db,$adminId,$sid,'lessons.all.read'))$allowed=array_map(static fn($st)=>(int)$st['id'],$allStages);else if($current!==null)foreach($allStages as $st)if($membership['stage_access_mode']==='all'||($membership['stage_access_mode']==='previous'&&(int)$st['position']<=$current)||($membership['stage_access_mode']==='current'&&(int)$st['id']===(int)$membership['current_stage_id']))$allowed[]=(int)$st['id'];
  if($action==='stages'){respond(200,['stages'=>array_values(array_filter($allStages,fn($st)=>in_array((int)$st['id'],$allowed,true)))]);}
  if(!$allowed)respond(200,[$action=>[]]);$slots=implode(',',array_fill(0,count($allowed),'?'));
  if($action==='lessons'){$q=$db->prepare("SELECT DISTINCT l.id,l.subject_id,l.name,l.content_json FROM lessons l JOIN lesson_stages ls ON ls.lesson_id=l.id WHERE l.subject_id=? AND ls.stage_id IN ($slots) ORDER BY l.id");$q->execute(array_merge([$subject],$allowed));$rows=$q->fetchAll(PDO::FETCH_ASSOC);foreach($rows as &$row){$get=$db->prepare('SELECT stage_id FROM lesson_stages WHERE lesson_id=?');$get->execute([$row['id']]);$row['stage_ids']=array_values(array_intersect(array_map('intval',$get->fetchAll(PDO::FETCH_COLUMN)),$allowed));$row['content_blocks']=json_decode($row['content_json']??'[]',true);unset($row['content_json']);}respond(200,['lessons'=>$rows]);}
@@ -243,7 +257,9 @@ if($action==='members'){
  if($method==='PUT'){
   $body=json_decode(file_get_contents('php://input'),true);if(!is_array($body))respond(400,['error'=>'Некорректный JSON']);$id=numericId($body['id']??'');$q=$db->prepare('SELECT school_id FROM school_memberships WHERE id=?');$q->execute([$id]);$sid=(int)$q->fetchColumn();if(!$sid)respond(404,['error'=>'Участник не найден']);
   $override=(string)($body['stage_access_override']??'default');if(!in_array($override,['default','none','all'],true))respond(422,['error'=>'Неизвестный режим этапа']);
-  $stage=null;if($override==='default'){$stage=numericId($body['current_stage_id']??'');$q=$db->prepare('SELECT 1 FROM stages WHERE id=? AND school_id=?');$q->execute([$stage,$sid]);if(!$q->fetchColumn())respond(422,['error'=>'Этап не принадлежит школе']);}
+  $rawStage=$body['current_stage_id']??null;$stage=($rawStage===null||$rawStage==='')?null:numericId($rawStage);
+  if($stage!==null){$q=$db->prepare('SELECT 1 FROM stages WHERE id=? AND school_id=?');$q->execute([$stage,$sid]);if(!$q->fetchColumn())respond(422,['error'=>'Этап не принадлежит школе']);}
+  if($override==='default'&&$stage===null)respond(422,['error'=>'Выберите текущий этап обучения']);
   $roles=$body['role_ids']??[];if(!is_array($roles)||!count($roles)||count($roles)>30)respond(422,['error'=>'Выберите хотя бы одну роль']);$roles=array_unique(array_map('intval',$roles));foreach($roles as $rid)exists($db,'roles',numericId($rid));
   $db->beginTransaction();try{$db->prepare('UPDATE school_memberships SET current_stage_id=?,stage_access_override=? WHERE id=?')->execute([$stage,$override,$id]);$db->prepare('DELETE FROM membership_roles WHERE membership_id=?')->execute([$id]);$q=$db->prepare('INSERT INTO membership_roles(membership_id,role_id) VALUES(?,?)');foreach($roles as $rid)$q->execute([$id,$rid]);$db->commit();}catch(Throwable $e){if($db->inTransaction())$db->rollBack();throw $e;}respond(200,['ok'=>true]);
  }
@@ -291,7 +307,7 @@ if($action==='school_access'){
  $db->prepare('UPDATE schools SET stage_access_mode=?,invite_role_id=? WHERE id=?')->execute([$mode,$role,$id]);respond(200,['ok'=>true]);
 }
 if($method==='GET'){
-if($action==='schools')respond(200,['schools'=>$db->query("SELECT s.id,s.name,s.description,CASE m.stage_access_override WHEN 'all' THEN 'Все этапы' WHEN 'none' THEN 'Нет этапа' ELSE st.name END AS current_stage_name FROM schools s LEFT JOIN school_memberships m ON m.school_id=s.id AND m.user_id=" . (int)$adminId . " LEFT JOIN stages st ON st.id=m.current_stage_id AND st.school_id=s.id ORDER BY s.name COLLATE NOCASE")->fetchAll(PDO::FETCH_ASSOC)]);
+if($action==='schools')respond(200,['schools'=>$db->query("SELECT s.id,s.name,s.description,CASE WHEN m.stage_access_override='none' THEN 'Нет доступа' ELSE st.name END AS current_stage_name FROM schools s LEFT JOIN school_memberships m ON m.school_id=s.id AND m.user_id=" . (int)$adminId . " LEFT JOIN stages st ON st.id=m.current_stage_id AND st.school_id=s.id ORDER BY s.name COLLATE NOCASE")->fetchAll(PDO::FETCH_ASSOC)]);
 if($action==='stages'){$school=numericId($_GET['school_id']??'');exists($db,'schools',$school);$q=$db->prepare('SELECT id,school_id,name,position,invite_code FROM stages WHERE school_id=? ORDER BY position,id');$q->execute([$school]);respond(200,['stages'=>$q->fetchAll(PDO::FETCH_ASSOC)]);}
 if($action==='subjects'){$school=numericId($_GET['school_id']??'');exists($db,'schools',$school);$s=$db->prepare('SELECT id,school_id,name FROM subjects WHERE school_id=? ORDER BY id');$s->execute([$school]);respond(200,['subjects'=>$s->fetchAll(PDO::FETCH_ASSOC)]);}
 if($action==='lessons'){$subject=numericId($_GET['subject_id']??'');exists($db,'subjects',$subject);$s=$db->prepare('SELECT l.id,l.subject_id,l.name,l.content_json,(SELECT json_group_array(stage_id) FROM lesson_stages WHERE lesson_id=l.id) AS stage_ids FROM lessons l WHERE l.subject_id=? ORDER BY l.id');$s->execute([$subject]);$rows=$s->fetchAll(PDO::FETCH_ASSOC);foreach($rows as &$row){$row['stage_ids']=json_decode($row['stage_ids'],true);$row['content_blocks']=json_decode($row['content_json']??'[]',true);unset($row['content_json']);}respond(200,['lessons'=>$rows]);}

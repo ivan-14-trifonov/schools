@@ -123,7 +123,7 @@ async function renderResponses(){const list=$('responses-list'),tools=$('respons
  if(responseFilter){tools.append(button('Показать все задания',()=>{responseFilter=null;renderResponses();}));}
  try{const params={school_id:selected,scope};if(responseFilter)params.assignment_id=responseFilter;const data=await request('answers','GET',null,params);
  if(!data.answers.length){list.append(element('p','Ответов пока нет','muted'));return;}
- data.answers.forEach(a=>{const card=element('div',undefined,'panel');card.append(element('h3',a.subject_name+' — '+a.lesson_name+' — '+a.title));card.append(element('p',(scope==='all'?(a.first_name+' '+a.last_name+' ('+a.username+') · '):'')+a.submitted_at+(a.version?' · версия '+a.version:''),'muted small'));let display=a.answer_text;if(a.type==='composite_question'){try{display=formatCompositeAnswer(JSON.parse(a.schema_json),JSON.parse(a.answer_text));}catch{}}const content=element('p',display);content.style.whiteSpace='pre-wrap';card.append(content);
+ data.answers.forEach(a=>{const card=element('div',undefined,'panel');card.append(element('h3',a.subject_name+' — '+(a.stage_name||'Этап не указан')+' — '+a.lesson_name+' — '+a.title));card.append(element('p',(scope==='all'?(a.first_name+' '+a.last_name+' ('+a.username+') · '):'')+a.submitted_at+(a.version?' · версия '+a.version:''),'muted small'));let display=a.answer_text;if(a.type==='composite_question'){try{display=formatCompositeAnswer(JSON.parse(a.schema_json),JSON.parse(a.answer_text));}catch{}}const content=element('p',display);content.style.whiteSpace='pre-wrap';card.append(content);
  if(isAdmin){const actions=element('div',undefined,'actions');actions.append(button('Удалить ответ',async()=>{if(!confirm('Удалить отправленный ответ №'+a.id+'? Восстановить его через интерфейс будет невозможно. Само задание и другие ответы останутся.'))return;try{await request('answer_delete','DELETE',{id:Number(a.id)});await renderResponses();notice('Отправленный ответ удалён');}catch(err){notice(err.message,true);}},'danger'));card.append(actions);}list.append(card);});
  }catch(e){list.append(element('p',e.message,'error'));}}
 function navigateResponses(id=null){responseFilter=id;navigateTo('/','responses');renderResponses();}
@@ -153,7 +153,13 @@ function renderAssignmentLinks(target){target.querySelectorAll('a[href]').forEac
  const u=new URL(anchor.href);const match=u.origin===location.origin&&u.pathname.match(/^\/assignments\/([1-9]\d*)\/?$/);if(!match||anchor.textContent.trim().toLowerCase()!=='assignment')return;
  const id=Number(match[1]);const wrapper=element('div','Загрузка задания…','panel');anchor.replaceWith(wrapper);
  request('assignment','GET',null,{id}).then(async ({assignment:a})=>{
-  wrapper.replaceChildren();wrapper.append(element('h3',a.title),element('p',a.question));const body=element('div');wrapper.append(body);
+  wrapper.replaceChildren();wrapper.append(element('h3',a.title),element('p',a.question));const body=element('div');
+  const stageChoices=a.stages||[];let selectedStage=isAdmin?(stageChoices.some(st=>Number(st.id)===Number(a.current_stage_id))?Number(a.current_stage_id):Number(stageChoices[0]?.id||0)):Number(a.current_stage_id||0);
+  const stageName=stageChoices.find(st=>Number(st.id)===selectedStage)?.name||'';
+  if(isAdmin&&stageChoices.length){const stageLabel=element('label','Этап ответа');const stageSelect=document.createElement('select');stageChoices.forEach(st=>stageSelect.append(new Option(st.name,String(st.id))));stageSelect.value=String(selectedStage);stageSelect.addEventListener('change',()=>{selectedStage=Number(stageSelect.value);refreshLatest();});stageLabel.append(stageSelect);wrapper.append(stageLabel);}
+  else if(stageName)wrapper.append(element('p','Этап: '+stageName,'muted small'));
+  const canSubmit=()=>Boolean(a.can_submit)&&stageChoices.some(st=>Number(st.id)===selectedStage);
+  wrapper.append(body);
   const actions=element('div',undefined,'assignment-actions');let retryButton=null;
   if(answerRights.own||answerRights.all){const view=button('Просмотреть ответы',()=>navigateResponses(id),'assignment-action assignment-action-secondary');actions.append(view);}
   if(isAdmin){const edit=button('Редактировать',()=>assignmentEditor({id:a.lesson_id},a),'assignment-action assignment-action-secondary');actions.append(edit);}
@@ -162,21 +168,25 @@ function renderAssignmentLinks(target){target.querySelectorAll('a[href]').forEac
    body.replaceChildren();const receipt=element('div',undefined,'assignment-receipt');receipt.append(element('strong','Ответ отправлен'),element('p','Дата отправки: '+formatSubmissionTime(answer.submitted_at),'muted small'));
    let display=answer.answer_text;if(answer.type==='composite_question'){try{display=formatCompositeAnswer(answer.fields||[],JSON.parse(answer.answer_text));}catch{}}
    const value=element('p',display);value.style.whiteSpace='pre-wrap';receipt.append(element('h4','Ваш отправленный ответ'),value);body.append(receipt);
-   retryButton=button('Отправить новый ответ',showForm,'assignment-action assignment-action-primary');actions.prepend(retryButton);
+   if(canSubmit()){retryButton=button('Отправить новый ответ',showForm,'assignment-action assignment-action-primary');actions.prepend(retryButton);}
   };
   const showForm=()=>{
    if(retryButton){retryButton.remove();retryButton=null;}
-   body.replaceChildren();const form=element('form');let getValues,input;
+   body.replaceChildren();if(!canSubmit()){body.append(element('p','Этот урок доступен только для просмотра. Отправлять ответы можно только на задания своего текущего этапа при наличии права «Отправка ответов».','muted'));return;}
+   const form=element('form');let getValues,input;
    if(a.type==='composite_question')getValues=compositeAnswerFields(a.fields||[],form);else{const label=element('label','Ваш ответ');input=document.createElement('textarea');input.required=true;input.rows=4;label.append(input);form.append(label);}
    const submit=element('button','Отправить ответ','assignment-action assignment-action-primary');submit.type='submit';form.append(submit);body.append(form);
    const requestKey=newSubmissionKey();
-   form.addEventListener('submit',async e=>{e.preventDefault();if(submit.disabled)return;submit.disabled=true;const payload=a.type==='composite_question'?{assignment_id:id,version_id:a.version_id,request_key:requestKey,values:getValues()}:{assignment_id:id,version_id:a.version_id,request_key:requestKey,answer_text:input.value};
+   form.addEventListener('submit',async e=>{e.preventDefault();if(submit.disabled)return;submit.disabled=true;const payload=a.type==='composite_question'?{assignment_id:id,stage_id:selectedStage,version_id:a.version_id,request_key:requestKey,values:getValues()}:{assignment_id:id,stage_id:selectedStage,version_id:a.version_id,request_key:requestKey,answer_text:input.value};
     try{const data=await request('answer_submit','POST',payload);showReceipt(data.answer);notice('Ответ успешно отправлен');}
     catch(err){notice(err.message,true);submit.disabled=false;}
    });
   };
-  try{const result=await request('answer_latest','GET',null,{assignment_id:id});if(result.answer)showReceipt(result.answer);else showForm();}
-  catch(err){body.append(element('p','Не удалось проверить предыдущие ответы: '+err.message,'error'));showForm();}
+  const refreshLatest=async()=>{if(retryButton){retryButton.remove();retryButton=null;}body.replaceChildren();
+   if(!stageChoices.some(st=>Number(st.id)===selectedStage)){showForm();return;}
+   try{const params={assignment_id:id};if(isAdmin)params.stage_id=selectedStage;const result=await request('answer_latest','GET',null,params);if(result.answer)showReceipt(result.answer);else showForm();}
+   catch(err){body.append(element('p','Не удалось проверить предыдущие ответы: '+err.message,'error'));showForm();}
+  };await refreshLatest();
  }).catch(e=>{wrapper.textContent=e.message;});
 });}
 let authMode='login';
@@ -202,8 +212,10 @@ initAuth().catch(e=>{$('auth-screen').hidden=false;$('auth-error').textContent=e
 $('join-form').addEventListener('submit',e=>{e.preventDefault();run(async()=>{const data=await request('join','POST',{code:$('join-code').value.trim()});$('join-code').value='';selected=String(data.school_id);await load();},'Вы присоединились к школе');});
 async function renderMemberManagement(){const list=$('member-list');if(!list)return;list.replaceChildren();const roleData=await request('roles');for(const school of schools){const section=element('div',undefined,'school-stages');section.append(element('h3',school.name));const [data,stData]=await Promise.all([request('members','GET',null,{school_id:school.id}),request('stages','GET',null,{school_id:school.id})]);const stageOptions=stData.stages;
  const addForm=element('form');addForm.className='form-row';const username=document.createElement('input');username.placeholder='Логин существующего пользователя';username.required=true;const stageSelect=document.createElement('select');stageOptions.forEach(st=>stageSelect.append(new Option(st.name,String(st.id))));const roleSelect=document.createElement('select');roleData.roles.forEach(r=>roleSelect.append(new Option(r.name,String(r.id))));const add=element('button','Добавить','primary');add.type='submit';addForm.append(username,stageSelect,roleSelect,add);addForm.addEventListener('submit',e=>{e.preventDefault();run(async()=>{await request('members','POST',{school_id:school.id,username:username.value.trim(),current_stage_id:Number(stageSelect.value),role_id:Number(roleSelect.value)});await renderMemberManagement();},'Пользователь добавлен');});section.append(addForm);
- data.members.forEach(m=>{const row=element('div',undefined,'item');const heading=element('strong',m.username);const controls=element('div',undefined,'member-controls');const stage=document.createElement('select');stage.append(new Option('— Специальные значения —','',true,false));stage.options[0].disabled=true;
-stage.append(new Option('Нет этапа','special:none'),new Option('Все этапы','special:all'));
-const divider=new Option('— Этапы школы —','');divider.disabled=true;stage.append(divider);
-stageOptions.forEach(st=>stage.append(new Option(st.name,String(st.id))));
-stage.value=m.stage_access_override&&m.stage_access_override!=='default'?'special:'+m.stage_access_override:String(m.current_stage_id||'');const roles=element('div');const checks=[];roleData.roles.forEach(r=>{const label=element('label',undefined,'stage-option');const check=document.createElement('input');check.type='checkbox';check.checked=m.role_ids.includes(Number(r.id));checks.push([check,r.id]);label.append(check,element('span',r.name));roles.append(label);});const save=button('Сохранить',()=>run(async()=>{await request('members','PUT',{id:m.id,current_stage_id:stage.value.startsWith('special:')?null:Number(stage.value),stage_access_override:stage.value.startsWith('special:')?stage.value.slice(8):'default',role_ids:checks.filter(([c])=>c.checked).map(([,id])=>id)});await renderMemberManagement();},'Права пользователя сохранены'),'primary');const remove=button('Удалить из школы',()=>{if(confirm('Удалить пользователя из школы?'))run(async()=>{await request('members','DELETE',{id:m.id});await renderMemberManagement();},'Удалён из школы');},'danger');controls.append(stage,roles,save,remove);row.append(heading,controls);section.append(row);});list.append(section);}}
+ data.members.forEach(m=>{const row=element('div',undefined,'item');const heading=element('strong',m.username);const controls=element('div',undefined,'member-controls');
+ const stageWrap=element('label','Текущий этап');const stage=document.createElement('select');stage.append(new Option('Не назначен',''));stageOptions.forEach(st=>stage.append(new Option(st.name,String(st.id))));stage.value=String(m.current_stage_id||'');stageWrap.append(stage);
+ const accessWrap=element('label','Доступ к урокам');const access=document.createElement('select');[['default','По правам роли и настройкам школы'],['none','Нет доступа'],['all','Все этапы (особое разрешение)']].forEach(([value,label])=>access.append(new Option(label,value)));access.value=m.stage_access_override||'default';accessWrap.append(access);
+ const roles=element('div');const checks=[];roleData.roles.forEach(r=>{const label=element('label',undefined,'stage-option');const check=document.createElement('input');check.type='checkbox';check.checked=m.role_ids.includes(Number(r.id));checks.push([check,r.id]);label.append(check,element('span',r.name));roles.append(label);});
+ const save=button('Сохранить',()=>run(async()=>{await request('members','PUT',{id:m.id,current_stage_id:stage.value?Number(stage.value):null,stage_access_override:access.value,role_ids:checks.filter(([c])=>c.checked).map(([,id])=>id)});await renderMemberManagement();},'Права пользователя сохранены'),'primary');
+ const remove=button('Удалить из школы',()=>{if(confirm('Удалить пользователя из школы?'))run(async()=>{await request('members','DELETE',{id:m.id});await renderMemberManagement();},'Удалён из школы');},'danger');
+ controls.append(stageWrap,accessWrap,roles,save,remove);row.append(heading,controls);section.append(row);});list.append(section);}}
