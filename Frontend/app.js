@@ -49,14 +49,54 @@ async function loadSubjects(){subjects=[];lessons={};if(active()){subjects=(awai
 async function loadStages(){stages=[];if(active())stages=(await request('stages','GET',null,{school_id:selected})).stages;renderStages();}
 function renderStages(){renderSchools();}
 document.addEventListener('play',event=>{if(!(event.target instanceof HTMLAudioElement))return;document.querySelectorAll('audio').forEach(audio=>{if(audio!==event.target&&!audio.paused)audio.pause();});},true);
+// Only transform known video services into iframe URLs. An ordinary HTTPS URL stays an external link.
+function videoEmbedUrl(source){
+ let url;try{url=new URL(source);}catch{return null;}
+ if(url.protocol!=='https:'||url.username||url.password)return null;
+ const host=url.hostname.toLowerCase().replace(/\.$/,'');const path=url.pathname;
+ if(['youtube.com','www.youtube.com','m.youtube.com','youtube-nocookie.com','www.youtube-nocookie.com','youtu.be','www.youtu.be'].includes(host)){
+  let id=null;
+  if(host==='youtu.be'||host==='www.youtu.be')id=path.match(/^\/([A-Za-z0-9_-]{11})\/?$/)?.[1];
+  else id=path==='/watch'?url.searchParams.get('v'):path.match(/^\/(?:embed|shorts|live)\/([A-Za-z0-9_-]{11})\/?$/)?.[1];
+  return /^[A-Za-z0-9_-]{11}$/.test(id||'')?'https://www.youtube-nocookie.com/embed/'+id:null;
+ }
+ if(['rutube.ru','www.rutube.ru'].includes(host)){
+  const id=path.match(/^\/(?:video|shorts|play\/embed)\/([a-fA-F0-9]{32})\/?$/)?.[1];
+  return id?'https://rutube.ru/play/embed/'+id:null;
+ }
+ if(['drive.google.com'].includes(host)){
+  const id=path.match(/^\/file\/d\/([A-Za-z0-9_-]{10,})\/(?:view|preview)?\/?$/)?.[1];
+  return id?'https://drive.google.com/file/d/'+id+'/preview':null;
+ }
+ return null;
+}
+function videoUrlIsAllowed(source){
+ try{const u=new URL(source);return u.protocol==='https:'&&!u.username&&!u.password&&!!u.hostname;}catch{return false;}
+}
+function renderLessonVideos(node){
+ node.querySelectorAll('a[data-school-video]').forEach(link=>{
+  const source=link.getAttribute('href')||'';
+  if(!videoUrlIsAllowed(source)){link.remove();return;}
+  const embedded=link.getAttribute('data-school-video')==='embed';
+  const parent=document.createElement('div');parent.className='lesson-video';
+  if(embedded){const embed=videoEmbedUrl(source);if(embed){
+   const frameBox=document.createElement('div');frameBox.className='lesson-video-player';
+   const frame=document.createElement('iframe');frame.src=embed;frame.title='Видеоурок';frame.loading='lazy';frame.referrerPolicy='strict-origin-when-cross-origin';frame.allow='fullscreen; encrypted-media; picture-in-picture';frame.allowFullscreen=true;
+   frameBox.append(frame);parent.append(frameBox);
+   const tip=document.createElement('p');tip.className='lesson-video-hint';tip.textContent='Если видео не воспроизводится здесь, откройте его по внешней ссылке.';parent.append(tip);
+  }}
+  link.textContent='Открыть видео на внешнем сайте';link.target='_blank';link.rel='noopener noreferrer';
+  parent.append(link.cloneNode(true));link.replaceWith(parent);
+ });
+}
 function renderLessonBlocks(blocks,target){
  target.replaceChildren();const node=element('div',undefined,'lesson-html');
  if(!window.DOMPurify){node.textContent='Не удалось загрузить библиотеку очистки HTML';target.append(node);return;}
  const html=blocks?.[0]?.type==='html'?blocks[0].html:'';
- node.innerHTML=window.DOMPurify.sanitize(html,{FORBID_TAGS:['script','iframe','form','style'],FORBID_ATTR:['style']});
+ node.innerHTML=window.DOMPurify.sanitize(html,{FORBID_TAGS:['script','iframe','form','style'],FORBID_ATTR:['style'],ADD_ATTR:['data-school-video']});
  node.querySelectorAll('a').forEach(a=>{a.target='_blank';a.rel='noopener noreferrer';});
  node.querySelectorAll('audio').forEach(audio=>{const src=audio.getAttribute('src')||'';let url;try{url=new URL(src,location.origin);}catch{audio.remove();return;}if(url.protocol!=='https:'&&!(url.origin===location.origin&&url.pathname.startsWith('/media/')))audio.remove();else{audio.controls=true;audio.preload='metadata';}});
- renderAssignmentLinks(node);target.append(node);
+ renderAssignmentLinks(node);renderLessonVideos(node);target.append(node);
 }
 let joditAssetPromise;
 function loadJoditEditor(){
@@ -86,13 +126,40 @@ async function lessonEditor(lesson,subject){
   const textarea=document.createElement('textarea');host.append(textarea);
   editor=window.Jodit.make(textarea,{height:500,toolbarAdaptive:false,buttons:['undo','redo','|','bold','italic','underline','strikethrough','|','ul','ol','|','paragraph','|','link','table','hr','|','source']});
   const firstHtml=lesson?.content_blocks?.[0]?.html||'';
-  editor.value=window.DOMPurify.sanitize(firstHtml,{FORBID_TAGS:['script','iframe','form','style'],FORBID_ATTR:['style']});
+  editor.value=window.DOMPurify.sanitize(firstHtml,{FORBID_TAGS:['script','iframe','form','style'],FORBID_ATTR:['style'],ADD_ATTR:['data-school-video']});
   editor.events.on('change',()=>{dirty=true;});
-  message.textContent='Визуальное редактирование HTML. Аудиозаписи и ссылки на задания сохраняются внутри урока.';
+  message.textContent='Визуальное редактирование HTML. Чтобы изменить способ просмотра видео, нажмите на его ссылку в редакторе.';
   mediaControls.append(button('Вставить аудио',()=>{const src=prompt('HTTPS-ссылка или путь /media/… к аудиофайлу','/media/audio/');if(!src)return;let url;try{url=new URL(src.trim(),location.origin);}catch{notice('Некорректная ссылка',true);return;}
    if(url.protocol!=='https:'&&!(url.origin===location.origin&&url.pathname.startsWith('/media/'))){notice('Разрешены HTTPS-ссылки и внутренние /media/',true);return;}
    const audio=document.createElement('audio');audio.controls=true;audio.preload='metadata';audio.src=url.href;editor.selection.insertHTML('<p>'+audio.outerHTML+'</p>');dirty=true;
   }));
+  const openVideoDialog=(existing=null)=>{
+   // Store a hyperlink and an optional embedding flag, never a raw iframe in lesson HTML.
+   const picker=element('div',undefined,'video-dialog');
+   const heading=element('h3','Видео по ссылке');
+   const urlLabel=element('label','Ссылка на видео');const urlInput=document.createElement('input');urlInput.type='url';urlInput.required=true;urlInput.placeholder='https://…';urlInput.value=existing?.getAttribute('href')||'';urlLabel.append(urlInput);
+   const toggleLabel=element('label',undefined,'stage-option');const toggle=document.createElement('input');toggle.type='checkbox';toggle.checked=existing?.getAttribute('data-school-video')==='embed';toggleLabel.append(toggle,element('span','Показывать встроенный проигрыватель'));
+   const warning=element('p','Сохраните урок и проверьте воспроизведение видео во встроенном проигрывателе. Если видео не воспроизводится, уберите галочку.','muted small');warning.hidden=!toggle.checked;
+   const error=element('p',undefined,'error');const buttons=element('div',undefined,'actions');
+   const originalSelection=document.getSelection();const originalRange=originalSelection&&originalSelection.rangeCount&&editor.editor.contains(originalSelection.anchorNode)?originalSelection.getRangeAt(0).cloneRange():null;
+   const cancel=button('Отмена',()=>{});const submit=element('button',existing?'Сохранить видео':'Вставить','primary');submit.type='button';buttons.append(cancel,submit);picker.append(heading,urlLabel,toggleLabel,warning,error,buttons);
+   toggle.addEventListener('change',()=>{warning.hidden=!toggle.checked;});
+   const linked=element('div');linked.append(picker);
+   const topDialog=element('div',undefined,'video-dialog-backdrop');topDialog.append(linked);form.append(topDialog);
+   cancel.addEventListener('click',()=>topDialog.remove());
+   submit.addEventListener('click',()=>{const source=urlInput.value.trim();if(!videoUrlIsAllowed(source)){error.textContent='Укажите ссылку HTTPS на видео';return;}
+    if(toggle.checked&&!videoEmbedUrl(source)){error.textContent='Встроенный плеер доступен для ссылок YouTube, RuTube и Google Диска. Снимите галочку для обычной ссылки.';return;}
+    const link=document.createElement('a');link.href=source;link.textContent='Видео: открыть по ссылке';link.setAttribute('data-school-video',toggle.checked?'embed':'link');
+    if(originalRange&&originalRange.startContainer.isConnected&&editor.editor.contains(originalRange.commonAncestorContainer)){
+     const selection=document.getSelection();selection.removeAllRanges();selection.addRange(originalRange);
+    }
+    if(existing&&existing.isConnected){existing.replaceWith(link);editor.events.fire('change');}else{editor.selection.insertHTML('<p>'+link.outerHTML+'</p>');}dirty=true;topDialog.remove();
+   });
+   urlInput.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();submit.click();}});
+   urlInput.focus();
+  };
+  mediaControls.append(button('Вставить видео',()=>openVideoDialog()));
+  editor.editor.addEventListener('click',e=>{const link=e.target.closest?.('a[data-school-video]');if(link&&editor.editor.contains(link)){e.preventDefault();e.stopPropagation();openVideoDialog(link);}},true);
   let pendingImages=0;
   const imageInput=document.createElement('input');imageInput.type='file';imageInput.accept='image/png,image/jpeg,image/webp,image/gif';imageInput.multiple=true;imageInput.hidden=true;mediaControls.append(imageInput);
   const pickImages=button('Вставить изображение',()=>imageInput.click());mediaControls.append(pickImages);
@@ -134,7 +201,7 @@ async function lessonEditor(lesson,subject){
   save.disabled=false;
  }catch(err){message.textContent='Не удалось открыть HTML-редактор: '+err.message;return;}
  form.addEventListener('submit',async e=>{e.preventDefault();if(!editor||saving||save.disabled)return;saving=true;save.disabled=true;
-  try{const html=window.DOMPurify.sanitize(editor.value,{FORBID_TAGS:['script','iframe','form','style'],FORBID_ATTR:['style']});if(Array.from(new DOMParser().parseFromString(html,'text/html').images).some(img=>/^(data|blob):/i.test(img.getAttribute('src')||'')))throw Error('Изображение из буфера не загружено на сервер. Вставьте его через кнопку «Вставить изображение».');const stage_ids=checks.filter(([input])=>input.checked).map(([,stage])=>Number(stage.id));
+  try{const html=window.DOMPurify.sanitize(editor.value,{FORBID_TAGS:['script','iframe','form','style'],FORBID_ATTR:['style'],ADD_ATTR:['data-school-video']});if(Array.from(new DOMParser().parseFromString(html,'text/html').images).some(img=>/^(data|blob):/i.test(img.getAttribute('src')||'')))throw Error('Изображение из буфера не загружено на сервер. Вставьте его через кнопку «Вставить изображение».');const stage_ids=checks.filter(([input])=>input.checked).map(([,stage])=>Number(stage.id));
    const content_blocks=html.trim()?[{type:'html',html}]:[];
    await request('lessons',lesson?'PUT':'POST',lesson?{id:lesson.id,name:name.value.trim(),content_blocks,stage_ids}:{subject_id:subject.id,name:name.value.trim(),content_blocks,stage_ids});
    dirty=false;editor.destruct();overlay.remove();await loadSubjects();notice(lesson?'Урок изменён':'Урок добавлен');
