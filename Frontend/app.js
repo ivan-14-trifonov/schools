@@ -100,10 +100,65 @@ function lessonEditor(lesson,subject){
  overlay.addEventListener('click',e=>{if(e.target===overlay)overlay.remove();});
  form.addEventListener('submit',async e=>{e.preventDefault();save.disabled=true;const stage_ids=checks.filter(([input])=>input.checked).map(([,stage])=>Number(stage.id));try{const content_blocks=normalizeLessonBlocks(blocks);await request('lessons',lesson?'PUT':'POST',lesson?{id:lesson.id,name:name.value.trim(),content_blocks,stage_ids}:{subject_id:subject.id,name:name.value.trim(),content_blocks,stage_ids});overlay.remove();await loadSubjects();notice(lesson?'Урок изменён':'Урок добавлен');}catch(err){notice(err.message,true);save.disabled=false;}});
 }
+let joditAssetPromise;
+function loadJoditLab(){
+ if(window.Jodit)return Promise.resolve();
+ if(joditAssetPromise)return joditAssetPromise;
+ joditAssetPromise=new Promise((resolve,reject)=>{
+  if(!document.querySelector('link[data-editor-lab]')){const css=document.createElement('link');css.rel='stylesheet';css.href='/vendor/jodit.fat.min.css?v=4.17.4';css.dataset.editorLab='1';document.head.append(css);}
+  const script=document.createElement('script');script.src='/vendor/jodit.fat.min.js?v=4.17.4';script.onload=()=>window.Jodit?resolve():reject(Error('Редактор Jodit не инициализирован'));script.onerror=()=>reject(Error('Не удалось загрузить редактор Jodit'));document.head.append(script);
+ }).catch(err=>{joditAssetPromise=null;throw err;});
+ return joditAssetPromise;
+}
+function lessonBlocksAsHtml(blocks){
+ const fragments=[];
+ (blocks||[]).forEach(block=>{
+  if(block.type==='markdown'){
+   const parsed=window.marked?window.marked.parse(block.text||''):(block.text||'');
+   const safe=window.DOMPurify?window.DOMPurify.sanitize(parsed,{USE_PROFILES:{html:true},FORBID_TAGS:['iframe','script','style','form'],FORBID_ATTR:['style']}):'';
+   fragments.push(safe);
+  }else if(block.type==='audio'){
+   const audio=document.createElement('audio');audio.controls=true;audio.preload='metadata';
+   const src=String(block.src||'');let url;
+   try{url=new URL(src,location.origin);}catch{return;}
+   if(url.protocol!=='https:'&&!(url.origin===location.origin&&url.pathname.startsWith('/media/')))return;
+   audio.src=url.href;fragments.push('<p>'+audio.outerHTML+'</p>');
+  }
+ });
+ return fragments.join('\n');
+}
+async function lessonEditorLab(lesson){
+ if(!isAdmin)return;
+ const overlay=element('div',undefined,'editor-overlay');const panel=element('div',undefined,'editor-card editor-lab-card');
+ const title=element('h2','Пробный HTML-редактор · '+lesson.name);
+ const description=element('p','Эксперимент: редактирование содержимого этого урока. Ничего не записывается в базу School. Черновик сохраняется только в этой вкладке браузера.','muted small');
+ const stage=element('div',undefined,'editor-lab-host');const actions=element('div',undefined,'actions');const state=element('p','Загрузка редактора…','muted small');
+ const output=element('div',undefined,'editor-lab-preview');output.hidden=true;
+ const close=()=>{try{instance?.destruct();}catch{}overlay.remove();};
+ let instance=null;actions.append(button('Закрыть',close));panel.append(title,description,stage,actions,state,output);overlay.append(panel);document.body.append(overlay);
+ overlay.addEventListener('click',e=>{if(e.target===overlay)close();});
+ try{
+  await loadJoditLab();if(!overlay.isConnected)return;
+  const host=document.createElement('textarea');stage.append(host);
+  const storageKey='school.editor-lab.'+selected+'.'+lesson.id;
+  instance=window.Jodit.make(host,{height:420,toolbarAdaptive:false,buttons:['undo','redo','|','bold','italic','underline','strikethrough','|','ul','ol','|','font','fontsize','paragraph','|','link','table','hr','|','source']});
+  instance.value=lessonBlocksAsHtml(lesson.content_blocks||[]);
+  state.textContent='Редактор работает отдельно от основного сохранения урока.';
+  const saveDraft=button('Сохранить пробный черновик',()=>{try{sessionStorage.setItem(storageKey,instance.value);state.textContent='Черновик сохранён в этой вкладке. База School не изменена.';}catch(err){state.textContent=err.message;}},'primary');
+  const restore=button('Открыть черновик',()=>{const content=sessionStorage.getItem(storageKey);if(content===null){state.textContent='Сохранённого пробного черновика нет.';return;}instance.value=window.DOMPurify.sanitize(content);state.textContent='Черновик восстановлен из вкладки браузера.';});
+  const reset=button('Загрузить исходный урок',()=>{if(!confirm('Заменить текст редактора содержимым исходного урока? Черновик не удаляется.'))return;instance.value=lessonBlocksAsHtml(lesson.content_blocks||[]);state.textContent='Исходный урок загружен для просмотра, база не менялась.';});
+  const insertAudio=button('Вставить аудио',()=>{const src=prompt('HTTPS-ссылка или путь /media/… к аудиофайлу','/media/audio/');if(!src)return;let url;try{url=new URL(src.trim(),location.origin);}catch{state.textContent='Некорректная ссылка.';return;}
+   if(url.protocol!=='https:'&&!(url.origin===location.origin&&url.pathname.startsWith('/media/'))){state.textContent='Разрешены HTTPS или внутренние /media/ ссылки.';return;}
+   const audio=document.createElement('audio');audio.controls=true;audio.src=url.href;audio.preload='metadata';instance.selection.insertHTML('<p>'+audio.outerHTML+'</p>');state.textContent='Аудио вставлено в пробный документ.';
+  });
+  const preview=button('Показать итоговый HTML',()=>{const raw=instance.value;output.hidden=false;output.replaceChildren();const heading=element('h3','Безопасный предпросмотр HTML');const render=element('div',undefined,'markdown-content');render.innerHTML=window.DOMPurify.sanitize(raw,{FORBID_TAGS:['script','iframe','form','style'],FORBID_ATTR:['style']});const code=element('textarea');code.readOnly=true;code.rows=7;code.value=raw;output.append(heading,render,element('h3','HTML-код'),code);state.textContent='Предпросмотр не сохраняет данные в School.';});
+  actions.prepend(insertAudio,saveDraft,restore,reset,preview);
+ }catch(err){state.textContent='Ошибка прототипа: '+err.message;}
+}
 function renderLearningLessons(){const list=$('learning-lessons');list.replaceChildren();if(!active())return;let count=0;const showStages=stages.length>1;subjects.forEach(subject=>{(lessons[subject.id]||[]).forEach(lesson=>{const stageNames=showStages?stages.filter(stage=>(lesson.stage_ids||[]).some(id=>Number(id)===Number(stage.id))).map(stage=>stage.name):[];const label=subject.name+(stageNames.length?' ('+stageNames.join(', ')+')':'')+' — '+lesson.name;list.append(button(label,()=>navigateTo('/lessons/'+lesson.id),'lesson-link'));count++;});});if(!count)list.append(element('p','Доступных уроков пока нет','muted'));}
 function renderSubjects(){const list=$('subject-list');list.replaceChildren();if(!active())return;if(!subjects.length){list.append(element('p','Пока нет предметов','muted'));return;}subjects.forEach(subject=>{const card=element('div',undefined,'panel');const top=element('div',undefined,'item');const h=element('h2',subject.name);const actions=element('div',undefined,'actions');if(isAdmin)actions.append(button('Переименовать',()=>editName('subjects',subject,loadSubjects)),button('Удалить',()=>removeItem('subjects',subject,loadSubjects,' вместе со всеми его уроками'),'danger'));top.append(h,actions);card.append(top);const rows=lessons[subject.id]||[];const groups=stages.map(stage=>({label:stage.name,items:rows.filter(lesson=>(lesson.stage_ids||[]).some(id=>Number(id)===Number(stage.id)))})).filter(group=>group.items.length);const unassigned=rows.filter(lesson=>!(lesson.stage_ids||[]).length);if(unassigned.length&&isAdmin)groups.push({label:'Без этапа',items:unassigned});groups.forEach(group=>{const section=element('section',undefined,'lesson-stage-group');section.append(element('h3',group.label,'lesson-stage-heading'));const ul=element('div',undefined,'lesson-list');group.items.forEach(lesson=>ul.append(button(lesson.name,()=>navigateTo('/lessons/'+lesson.id),'lesson-link')));section.append(ul);card.append(section);});if(!rows.length||!groups.length)card.append(element('p','Уроков пока нет','muted small'));if(isAdmin)card.append(button('Добавить урок',()=>lessonEditor(null,subject),'primary'));list.append(card);});}
 function showPage(page){document.querySelectorAll('[data-page]').forEach(x=>x.classList.toggle('active',x.dataset.page===page||page==='lesson-view'&&x.dataset.page==='subjects'));document.querySelectorAll('.page').forEach(x=>x.hidden=x.id!==page);}
-function showCurrentRoute(){const match=location.pathname.match(/^\/lessons\/([1-9]\d*)\/?$/);if(!match){showPage(['learning','subjects','settings','responses'].includes(history.state?.page)?history.state.page:'learning');return;}const id=Number(match[1]);let found=null,subject=null;for(const s of subjects){const item=(lessons[s.id]||[]).find(x=>Number(x.id)===id);if(item){found=item;subject=s;break;}}showPage('lesson-view');$('lesson-actions').replaceChildren();$('lesson-stages').replaceChildren();$('lesson-content').replaceChildren();if(!found){$('lesson-subject').textContent='';$('lesson-title').textContent='Урок недоступен';$('lesson-content').textContent='Урок не найден или у вас нет доступа к нему.';return;}$('lesson-subject').textContent=subject.name;$('lesson-title').textContent=found.name;if(found.content_blocks?.length)renderLessonBlocks(found.content_blocks,$('lesson-content'));else $('lesson-content').textContent='Содержание урока пока не добавлено';(found.stage_ids||[]).forEach(id=>{const st=stages.find(x=>Number(x.id)===Number(id));if(st)$('lesson-stages').append(element('span',st.name,'stage-tag'));});if(isAdmin)$('lesson-actions').append(button('Редактировать',()=>lessonEditor(found,subject),'primary'),button('Добавить задание',()=>assignmentEditor(found),'primary'));$('lesson-back').textContent=history.state?.fromResponses?'← К ответам':'← Все предметы';}
+function showCurrentRoute(){const match=location.pathname.match(/^\/lessons\/([1-9]\d*)\/?$/);if(!match){showPage(['learning','subjects','settings','responses'].includes(history.state?.page)?history.state.page:'learning');return;}const id=Number(match[1]);let found=null,subject=null;for(const s of subjects){const item=(lessons[s.id]||[]).find(x=>Number(x.id)===id);if(item){found=item;subject=s;break;}}showPage('lesson-view');$('lesson-actions').replaceChildren();$('lesson-stages').replaceChildren();$('lesson-content').replaceChildren();if(!found){$('lesson-subject').textContent='';$('lesson-title').textContent='Урок недоступен';$('lesson-content').textContent='Урок не найден или у вас нет доступа к нему.';return;}$('lesson-subject').textContent=subject.name;$('lesson-title').textContent=found.name;if(found.content_blocks?.length)renderLessonBlocks(found.content_blocks,$('lesson-content'));else $('lesson-content').textContent='Содержание урока пока не добавлено';(found.stage_ids||[]).forEach(id=>{const st=stages.find(x=>Number(x.id)===Number(id));if(st)$('lesson-stages').append(element('span',st.name,'stage-tag'));});if(isAdmin)$('lesson-actions').append(button('Редактировать',()=>lessonEditor(found,subject),'primary'),button('Добавить задание',()=>assignmentEditor(found),'primary'),button('Пробный HTML-редактор',()=>lessonEditorLab(found)));$('lesson-back').textContent=history.state?.fromResponses?'← К ответам':'← Все предметы';}
 function navigateTo(path,page){history.pushState(page?{page}:null,'',path);showCurrentRoute();notice('');window.scrollTo(0,0);}
 $('lesson-back').addEventListener('click',()=>{if(history.state?.fromResponses){navigateResponses(responseFilter);}else navigateTo('/','subjects');});
 window.addEventListener('popstate',()=>{showCurrentRoute();if(history.state?.page==='responses')renderResponses();});

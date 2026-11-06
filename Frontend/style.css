@@ -46,3 +46,6 @@ textarea{width:100%;padding:13px 14px;font:inherit;border:1px solid #cbd5e1;bord
 .assignment-action:focus-visible{outline:3px solid #93b4f7;outline-offset:2px}
 .assignment-action:disabled{opacity:.6;cursor:wait}
 @media(max-width:540px){.assignment-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.assignment-actions .assignment-action-primary{grid-column:1/-1}.assignment-actions .assignment-action{width:100%;padding:11px 10px}.assignment-actions .assignment-action-secondary:only-child{grid-column:1/-1}}
+
+/* Isolated WYSIWYG editor lab. No writes to lesson API. */
+.editor-lab-card{width:min(1080px,100%);max-height:94vh}.editor-lab-card .actions{justify-content:flex-start;flex-wrap:wrap}.editor-lab-host{margin:14px 0}.editor-lab-preview{margin-top:14px;padding:15px;border:1px solid #d9e3ef;border-radius:12px}.editor-lab-preview .markdown-content{padding:16px;border:1px solid #eef1f5;border-radius:8px}.editor-lab-preview audio{max-width:100%}
